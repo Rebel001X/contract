@@ -1,0 +1,322 @@
+# 合同审计系统 .gitignore
+# 企业级项目忽略文件配置
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.tmp
+*.temp
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# 项目特定文件
+logs/
+uploads/
+temp/
+backups/
+*.log
+*.log.*
+
+# 配置文件（包含敏感信息）
+.env
+.env.local
+.env.production
+.env.staging
+config.local.py
+secrets.json
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 向量数据库
+milvus_data/
+vector_store/
+
+# 模型文件
+models/
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.onnx
+*.pt
+*.pth
+
+# 文档文件
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+
+# 压缩文件
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# 临时文件
+tmp/
+temp/
+.tmp/
+.temp/
+
+# 缓存文件
+.cache/
+cache/
+*.cache
+
+# 监控和日志
+prometheus_data/
+grafana_data/
+elasticsearch_data/
+nginx_logs/
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# 测试文件
+test_*.py
+*_test.py
+tests/data/
+tests/fixtures/
+tests/output/
+
+# 性能测试结果
+perf_results/
+benchmark_results/
+
+# 安全扫描结果
+security_scan_results/
+bandit_report.json
+safety_report.json
+
+# 覆盖率报告
+coverage_html/
+coverage.xml
+.coverage.*
+
+# 文档生成
+docs/build/
+docs/_build/
+api_docs.html
+
+# 备份文件
+*.bak
+*.backup
+*.old
+*.orig
+
+# 系统文件
+.directory
+.fuse_hidden*
+.Trash-*
+.nfs*
+
+# 网络相关
+*.pcap
+*.cap
+
+# 其他
+*.pid
+*.seed
+*.pid.lock 
