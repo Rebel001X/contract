@@ -315,6 +315,7 @@ class ContractChatManager:
             self.logger.info(f"删除会话: {session_id}, 用户: {session.user_id}")
             return True
         return False
+
     
     @log_performance_metric
     def load_contract_to_vectorstore(self, contract_file: str) -> bool:
