@@ -9,4 +9,12 @@ psutil==5.9.6
 
 # 安全扫描工具 (可选)
 safety==2.3.5
-bandit==1.7.5 
+bandit==1.7.5
+
+# langchain
+# llama-index
+# llama-index-core
+# llama-index-vector-stores-milvus
+# llama-index-instrumentation
+# llama-index-workflows
+# pydantic-settings 

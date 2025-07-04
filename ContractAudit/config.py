@@ -5,8 +5,11 @@
 
 import os
 from typing import Optional
-from pydantic import BaseSettings, Field
+from pydantic_settings import BaseSettings
+from pydantic import Field
 from pathlib import Path
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 class Settings(BaseSettings):
@@ -82,6 +85,9 @@ class Settings(BaseSettings):
     # 监控配置
     ENABLE_METRICS: bool = Field(default=True, description="启用指标监控")
     METRICS_PORT: int = Field(default=8002, description="指标服务端口")
+    
+    # 数据库连接URL
+    DATABASE_URL: str = Field(default="sqlite:///./contract_audit.db", description="SQLAlchemy数据库连接URL")
     
     class Config:
         """Pydantic配置"""
@@ -204,4 +210,18 @@ CACHE_MAX_SIZE=1000
 # 监控配置
 ENABLE_METRICS=true
 METRICS_PORT=8002
-""" 
+"""
+
+# SQLAlchemy数据库引擎和Session
+engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True, future=True)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
+
+def get_engine():
+    return engine
+
+def get_session():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close() 

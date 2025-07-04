@@ -72,15 +72,7 @@ class ContractAuditPrompts:
     @staticmethod
     def get_clause_analysis_template() -> ChatPromptTemplate:
         """条款分析模板"""
-        template = """你是一个专业的合同条款分析师。请对用户指定的合同条款进行详细分析。
-
-合同内容：
-{contract_content}
-
-用户关注的条款：{target_clause}
-
-请从以下角度分析该条款：
-1. 条款含义和目的
+        template = """你是一个专业的合同条款分析师。请对用户指定的合同条款进行详细分析。1. 条款含义和目的
 2. 权利义务分配
 3. 潜在的法律问题
 4. 与其他条款的关系

@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>流式输出测试</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #333;
+        }
+        .input-section {
+            margin-bottom: 30px;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        textarea {
+            height: 100px;
+            resize: vertical;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .output-section {
+            margin-top: 30px;
+        }
+        .output-container {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .event {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+        .event.start {
+            background-color: #e3f2fd;
+            border-left-color: #2196f3;
+        }
+        .event.context_ready {
+            background-color: #f3e5f5;
+            border-left-color: #9c27b0;
+        }
+        .event.token {
+            background-color: #e8f5e8;
+            border-left-color: #4caf50;
+        }
+        .event.complete {
+            background-color: #fff3e0;
+            border-left-color: #ff9800;
+        }
+        .event.error {
+            background-color: #ffebee;
+            border-left-color: #f44336;
+        }
+        .event-header {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+        }
+        .event-data {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+            white-space: pre-wrap;
+        }
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+        }
+        .clear-btn {
+            background-color: #dc3545;
+        }
+        .clear-btn:hover {
+            background-color: #c82333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 流式输出测试工具</h1>
+            <p>测试 ContractAudit 系统的流式聊天功能</p>
+        </div>
+
+        <div class="input-section">
+            <div class="input-group">
+                <label for="sessionId">会话ID:</label>
+                <input type="text" id="sessionId" value="test_session" placeholder="输入会话ID">
+            </div>
+            <div class="input-group">
+                <label for="message">消息内容:</label>
+                <textarea id="message" placeholder="输入要发送的消息">请分析这个合同的风险点</textarea>
+            </div>
+            <div class="input-group">
+                <button id="startBtn" onclick="startStream()">开始流式输出</button>
+                <button id="stopBtn" onclick="stopStream()" disabled>停止</button>
+                <button class="clear-btn" onclick="clearOutput()">清空输出</button>
+            </div>
+        </div>
+
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-value" id="eventCount">0</div>
+                <div class="stat-label">事件数量</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="tokenCount">0</div>
+                <div class="stat-label">Token数量</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="duration">0s</div>
+                <div class="stat-label">持续时间</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="status">就绪</div>
+                <div class="stat-label">状态</div>
+            </div>
+        </div>
+
+        <div class="output-section">
+            <h3>📦 事件输出</h3>
+            <div class="output-container" id="outputContainer">
+                <p style="color: #999; text-align: center;">等待开始流式输出...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let startTime = null;
+        let eventCount = 0;
+        let tokenCount = 0;
+        let isStreaming = false;
+
+        function updateStats() {
+            document.getElementById('eventCount').textContent = eventCount;
+            document.getElementById('tokenCount').textContent = tokenCount;
+            
+            if (startTime && isStreaming) {
+                const duration = Math.round((Date.now() - startTime) / 1000);
+                document.getElementById('duration').textContent = duration + 's';
+            }
+        }
+
+        function updateStatus(status) {
+            document.getElementById('status').textContent = status;
+        }
+
+        function addEvent(eventData) {
+            const container = document.getElementById('outputContainer');
+            
+            // 清除初始提示
+            if (container.children.length === 1 && container.children[0].tagName === 'P') {
+                container.innerHTML = '';
+            }
+
+            const eventDiv = document.createElement('div');
+            eventDiv.className = `event ${eventData.event}`;
+            
+            const header = document.createElement('div');
+            header.className = 'event-header';
+            header.textContent = `📦 ${eventData.event.toUpperCase()} (${new Date(eventData.timestamp * 1000).toLocaleTimeString()})`;
+            
+            const data = document.createElement('div');
+            data.className = 'event-data';
+            data.textContent = JSON.stringify(eventData.data, null, 2);
+            
+            eventDiv.appendChild(header);
+            eventDiv.appendChild(data);
+            container.appendChild(eventDiv);
+            
+            // 滚动到底部
+            container.scrollTop = container.scrollHeight;
+            
+            // 更新统计
+            eventCount++;
+            if (eventData.event === 'token') {
+                tokenCount++;
+            }
+            updateStats();
+        }
+
+        function startStream() {
+            if (isStreaming) return;
+            
+            const sessionId = document.getElementById('sessionId').value.trim();
+            const message = document.getElementById('message').value.trim();
+            
+            if (!sessionId || !message) {
+                alert('请填写会话ID和消息内容');
+                return;
+            }
+            
+            // 重置状态
+            eventCount = 0;
+            tokenCount = 0;
+            startTime = Date.now();
+            isStreaming = true;
+            
+            // 更新UI
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            updateStatus('连接中...');
+            updateStats();
+            
+            // 准备请求数据
+            const requestData = {
+                session_id: sessionId,
+                message: message
+            };
+            
+            // 使用 fetch 发送流式请求
+            fetch('/chat/stream', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                updateStatus('流式输出中...');
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                function readStream() {
+                    return reader.read().then(({ done, value }) => {
+                        if (done) {
+                            updateStatus('完成');
+                            isStreaming = false;
+                            document.getElementById('startBtn').disabled = false;
+                            document.getElementById('stopBtn').disabled = true;
+                            return;
+                        }
+                        
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop(); // 保留不完整的行
+                        
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const jsonStr = line.substring(6);
+                                    const eventData = JSON.parse(jsonStr);
+                                    addEvent(eventData);
+                                } catch (e) {
+                                    console.error('JSON解析错误:', e, line);
+                                }
+                            }
+                        }
+                        
+                        return readStream();
+                    });
+                }
+                
+                return readStream();
+            })
+            .catch(error => {
+                console.error('流式请求错误:', error);
+                updateStatus('错误');
+                isStreaming = false;
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+                
+                addEvent({
+                    event: 'error',
+                    timestamp: Date.now() / 1000,
+                    data: {
+                        error: error.message,
+                        status: 'failed'
+                    }
+                });
+            });
+        }
+
+        function stopStream() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            
+            isStreaming = false;
+            updateStatus('已停止');
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        }
+
+        function clearOutput() {
+            document.getElementById('outputContainer').innerHTML = '<p style="color: #999; text-align: center;">等待开始流式输出...</p>';
+            eventCount = 0;
+            tokenCount = 0;
+            updateStats();
+        }
+
+        // 定期更新持续时间
+        setInterval(() => {
+            if (isStreaming && startTime) {
+                updateStats();
+            }
+        }, 1000);
+    </script>
+</body>
+</html> 

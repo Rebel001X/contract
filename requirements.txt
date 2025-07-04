@@ -4,38 +4,38 @@
 # Web框架
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.5.0
+pydantic~=2.11.7
 pydantic-settings==2.1.0
 
 # LangChain相关
-langchain==0.1.0
-langchain-core==0.1.0
-langchain-community==0.0.10
-langchain-text-splitters==0.0.1
+# langchain~=0.3.26
+# langchain-core~=0.3.66
+# langchain-community~=0.3.26
+# langchain-text-splitters==0.0.1
 
 # 向量数据库
-pymilvus==2.3.4
+# pymilvus==2.3.4
 
 # 嵌入模型
-sentence-transformers==2.2.2
-transformers==4.36.0
-torch>=2.0.0
+# sentence-transformers==2.2.2
+# transformers==4.36.0
+# torch>=2.0.0
 
 # 文档处理
-python-docx==1.1.0
-docx2txt==0.8
-PyPDF2==3.0.1
-python-multipart==0.0.6
+# python-docx==1.1.0
+# docx2txt==0.8
+# PyPDF2==3.0.1
+# python-multipart==0.0.6
 
 # 火山引擎Ark LLM (可选，如果不可用则跳过)
 # volcenginesdkarkruntime==1.0.0
 
 # 数据处理
-numpy==1.24.3
-pandas==2.1.4
+# numpy==1.24.3
+# pandas==2.1.4
 
 # 日志和监控
-loguru==0.7.2
+loguru~=0.7.3
 prometheus-client==0.19.0
 
 # 缓存
@@ -50,7 +50,7 @@ python-multipart==0.0.6
 pytest==7.4.3
 pytest-asyncio==0.21.1
 pytest-cov==4.1.0
-httpx==0.25.2
+httpx~=0.28.1
 
 # 开发工具
 black==23.11.0
@@ -62,3 +62,8 @@ isort==5.12.0
 python-dotenv==1.0.0
 click==8.1.7
 rich==13.7.0 
+SQLAlchemy~=2.0.41
+requests~=2.32.4
+
+# 新增依赖
+# llama-index

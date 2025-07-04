@@ -410,4 +410,253 @@ class SimpleContractChatManager:
         }
 
 # 全局聊天管理器实例
-chat_manager = SimpleContractChatManager() 
+chat_manager = SimpleContractChatManager()
+
+def print_banner():
+    """打印启动横幅"""
+    banner = """
+╔══════════════════════════════════════════════════════════════╗
+║                    合同审计聊天系统                           ║
+║                    Contract Audit Chat                       ║
+║                                                              ║
+║  简化版本 - 支持合同分析、风险评估、法律建议等功能            ║
+║  输入 'help' 查看帮助，输入 'quit' 退出                      ║
+╚══════════════════════════════════════════════════════════════╝
+"""
+    print(banner)
+
+def print_help():
+    """打印帮助信息"""
+    help_text = """
+📋 可用命令：
+• help                    - 显示此帮助信息
+• load <文件路径>         - 加载合同文件（支持 .txt 文件）
+• new                     - 创建新会话
+• list                    - 列出所有会话
+• stats                   - 显示系统统计
+• history <会话ID>        - 查看会话历史
+• quit/exit               - 退出程序
+
+💬 直接输入问题即可开始聊天，例如：
+• "这个合同有什么风险点？"
+• "分析一下付款条款"
+• "请总结合同主要内容"
+• "这个条款有什么法律问题？"
+
+🔧 示例操作：
+1. 输入: load sample_contract.txt
+2. 输入: new
+3. 输入: "请分析这个合同的风险点"
+"""
+    print(help_text)
+
+def interactive_chat():
+    """交互式聊天界面"""
+    print_banner()
+    
+    current_session_id = None
+    current_user_id = "default_user"
+    
+    while True:
+        try:
+            # 显示当前状态
+            if current_session_id:
+                session = chat_manager.get_session(current_session_id)
+                if session:
+                    print(f"\n[会话: {current_session_id[:8]}...] [用户: {current_user_id}] [消息数: {session.get_message_count()}]")
+                else:
+                    current_session_id = None
+            
+            # 获取用户输入
+            user_input = input("\n🤖 请输入命令或问题: ").strip()
+            
+            if not user_input:
+                continue
+            
+            # 处理命令
+            if user_input.lower() in ['quit', 'exit', 'q']:
+                print("👋 感谢使用合同审计聊天系统，再见！")
+                break
+            
+            elif user_input.lower() == 'help':
+                print_help()
+                continue
+            
+            elif user_input.lower().startswith('load '):
+                file_path = user_input[5:].strip()
+                if chat_manager.load_contract_to_vectorstore(file_path):
+                    print(f"✅ 合同文件加载成功: {file_path}")
+                else:
+                    print(f"❌ 合同文件加载失败: {file_path}")
+                continue
+            
+            elif user_input.lower() == 'new':
+                current_session_id = chat_manager.create_session(current_user_id)
+                print(f"✅ 新会话已创建: {current_session_id}")
+                continue
+            
+            elif user_input.lower() == 'list':
+                sessions = chat_manager.list_sessions(current_user_id)
+                if sessions:
+                    print("\n📋 当前会话列表:")
+                    for i, session in enumerate(sessions, 1):
+                        print(f"  {i}. 会话ID: {session['session_id'][:8]}...")
+                        print(f"     创建时间: {session['created_at']}")
+                        print(f"     消息数量: {session['message_count']}")
+                        print(f"     合同文件: {session['contract_file'] or '无'}")
+                        print()
+                else:
+                    print("📭 暂无会话")
+                continue
+            
+            elif user_input.lower() == 'stats':
+                stats = chat_manager.get_system_stats()
+                print("\n📊 系统统计信息:")
+                print(f"  总会话数: {stats['total_sessions']}")
+                print(f"  总消息数: {stats['total_messages']}")
+                print(f"  活跃用户数: {stats['active_users']}")
+                print(f"  向量存储: {'✅' if stats['vector_store_available'] else '❌'}")
+                print(f"  LLM客户端: {'✅' if stats['llm_client_available'] else '❌'}")
+                print(f"  嵌入模型: {'✅' if stats['embeddings_available'] else '❌'}")
+                print(f"  Ark服务: {'✅' if stats['ark_available'] else '❌'}")
+                
+                if stats['user_stats']:
+                    print("\n👥 用户统计:")
+                    for user_id, user_stat in stats['user_stats'].items():
+                        print(f"  用户 {user_id}: {user_stat['sessions']} 个会话, {user_stat['messages']} 条消息")
+                continue
+            
+            elif user_input.lower().startswith('history '):
+                session_id = user_input[8:].strip()
+                history = chat_manager.get_session_history(session_id)
+                if history:
+                    print(f"\n📜 会话历史 (ID: {session_id}):")
+                    for i, msg in enumerate(history['messages'], 1):
+                        role = "👤 用户" if msg['role'] == 'user' else "🤖 助手"
+                        print(f"  {i}. {role}: {msg['content'][:100]}{'...' if len(msg['content']) > 100 else ''}")
+                else:
+                    print(f"❌ 未找到会话: {session_id}")
+                continue
+            
+            # 处理聊天消息
+            if not current_session_id:
+                print("⚠️  请先创建会话 (输入 'new') 或加载合同文件 (输入 'load <文件路径>')")
+                continue
+            
+            # 发送聊天消息
+            print("🤔 正在处理您的问题...")
+            result = chat_manager.chat(current_session_id, user_input)
+            
+            if result.get('error'):
+                print(f"❌ 错误: {result['response']}")
+            else:
+                print(f"\n🤖 回复 (响应时间: {result['response_time']:.2f}s):")
+                print(f"{result['response']}")
+                
+                if result.get('context_used'):
+                    print(f"\n📄 使用的上下文: {result['context_used']}")
+        
+        except KeyboardInterrupt:
+            print("\n\n⚠️  检测到中断信号，输入 'quit' 退出程序")
+        except Exception as e:
+            print(f"❌ 发生错误: {e}")
+
+def create_sample_contract():
+    """创建示例合同文件"""
+    sample_content = """
+合同示例
+
+甲方：示例公司A
+乙方：示例公司B
+
+第一条 合同目的
+本合同的目的是为了规范双方在项目合作中的权利义务关系。
+
+第二条 合作内容
+1. 甲方负责提供技术支持
+2. 乙方负责提供资金支持
+3. 双方共同承担项目风险
+
+第三条 付款条款
+1. 乙方应在合同签订后30日内支付首付款50万元
+2. 项目完成后支付剩余款项
+3. 逾期付款按日利率0.05%计算违约金
+
+第四条 违约责任
+1. 任何一方违约应承担违约责任
+2. 违约金为合同总额的20%
+3. 造成损失的应承担赔偿责任
+
+第五条 争议解决
+因本合同引起的争议，双方应友好协商解决；协商不成的，提交仲裁机构仲裁。
+
+第六条 其他
+1. 本合同自双方签字盖章之日起生效
+2. 本合同一式两份，双方各执一份
+3. 未尽事宜，双方可另行协商
+
+甲方（盖章）：示例公司A
+乙方（盖章）：示例公司B
+签订日期：2024年1月1日
+"""
+    
+    sample_file = "sample_contract.txt"
+    try:
+        with open(sample_file, 'w', encoding='utf-8') as f:
+            f.write(sample_content)
+        print(f"✅ 示例合同文件已创建: {sample_file}")
+        return sample_file
+    except Exception as e:
+        print(f"❌ 创建示例合同文件失败: {e}")
+        return None
+
+def main():
+    """主函数"""
+    import sys
+    
+    # 检查命令行参数
+    if len(sys.argv) > 1:
+        if sys.argv[1] == '--help' or sys.argv[1] == '-h':
+            print("合同审计聊天系统")
+            print("用法: python chat_simple.py [选项]")
+            print("选项:")
+            print("  --help, -h    显示帮助信息")
+            print("  --sample      创建示例合同文件")
+            print("  --demo        运行演示模式")
+            return
+        elif sys.argv[1] == '--sample':
+            create_sample_contract()
+            return
+        elif sys.argv[1] == '--demo':
+            # 演示模式
+            print("🎭 启动演示模式...")
+            sample_file = create_sample_contract()
+            if sample_file:
+                chat_manager.load_contract_to_vectorstore(sample_file)
+                session_id = chat_manager.create_session("demo_user")
+                print(f"✅ 演示会话已创建: {session_id}")
+                
+                # 演示问题
+                demo_questions = [
+                    "请总结这个合同的主要内容",
+                    "这个合同有什么风险点？",
+                    "分析一下付款条款",
+                    "违约责任条款有什么问题？"
+                ]
+                
+                for question in demo_questions:
+                    print(f"\n🤔 演示问题: {question}")
+                    result = chat_manager.chat(session_id, question)
+                    print(f"🤖 回复: {result['response'][:200]}...")
+                    print("-" * 50)
+                
+                print("\n🎉 演示完成！您可以继续使用交互式聊天界面。")
+            
+            interactive_chat()
+            return
+    
+    # 默认启动交互式聊天
+    interactive_chat()
+
+if __name__ == "__main__":
+    main() 
