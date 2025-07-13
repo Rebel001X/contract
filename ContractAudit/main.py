@@ -5,6 +5,7 @@ ContractAudit模块主入口文件
 
 import sys
 import os
+from contextlib import asynccontextmanager
 
 if __name__ == "__main__" and (__package__ is None or __package__ == ""):
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,8 +36,13 @@ from sqlalchemy.orm import Session
 import uuid
 
 # 导入数据库相关模块
-from .config import get_session
-from .models import ContractAuditReview, create_contract_audit_review
+try:
+    from .config import get_session
+    from .models import ContractAuditReview, create_contract_audit_review
+except ImportError:
+    # 直接运行时使用绝对导入
+    from config import get_session
+    from models import ContractAuditReview, create_contract_audit_review
 
 # 处理相对导入问题 - 支持直接运行和模块导入
 # 添加项目根目录到Python路径
@@ -58,7 +64,7 @@ except ImportError as e:
 try:
     # 只导入完整版聊天管理器
     if __name__ == "__main__":
-        from ContractAudit.chat import get_chat_manager, ChatSession
+        from chat import get_chat_manager, ChatSession
     else:
         from .chat import get_chat_manager, ChatSession
     chat_manager = get_chat_manager()
@@ -169,8 +175,12 @@ except ImportError as e:
 
 # 导入结构化审查相关模块
 try:
-    from ContractAudit.structured_models import ComprehensiveContractReview
-    from ContractAudit.structured_service import StructuredReviewService
+    if __name__ == "__main__":
+        from structured_models import ComprehensiveContractReview
+        from structured_service import StructuredReviewService
+    else:
+        from .structured_models import ComprehensiveContractReview
+        from .structured_service import StructuredReviewService
     # 创建结构化审查服务实例
     structured_review_service = StructuredReviewService()
     print("✅ 结构化审查服务加载成功")
@@ -178,11 +188,25 @@ except ImportError as e:
     print(f"⚠️  结构化审查服务导入失败: {e}")
     structured_review_service = None
 
+# 使用新的 lifespan 事件处理器替代已弃用的 on_event
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动事件
+    print("ContractAudit Chat System starting up...")
+    print(f"Active sessions: {len(chat_manager.sessions)}")
+    
+    yield
+    
+    # 关闭事件
+    print("ContractAudit Chat System shutting down...")
+    print(f"Cleaning up {len(chat_manager.sessions)} sessions")
+
 # 创建FastAPI应用
 app = FastAPI(
     title="ContractAudit Chat System",
     description="基于LangChain的合同审计对话系统",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan  # 使用新的 lifespan 事件处理器
 )
 
 # 添加CORS中间件
@@ -1026,18 +1050,18 @@ async def delete_saved_review(review_id: int, db: Session = Depends(get_session)
         raise HTTPException(status_code=500, detail=f"删除审查记录失败: {str(e)}")
 
 # 启动事件
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时的初始化"""
-    print("ContractAudit Chat System starting up...")
-    print(f"Active sessions: {len(chat_manager.sessions)}")
+# @app.on_event("startup")
+# async def startup_event():
+#     """应用启动时的初始化"""
+#     print("ContractAudit Chat System starting up...")
+#     print(f"Active sessions: {len(chat_manager.sessions)}")
 
 # 关闭事件
-@app.on_event("shutdown")
-async def shutdown_event():
-    """应用关闭时的清理"""
-    print("ContractAudit Chat System shutting down...")
-    print(f"Cleaning up {len(chat_manager.sessions)} sessions")
+# @app.on_event("shutdown")
+# async def shutdown_event():
+#     """应用关闭时的清理"""
+#     print("ContractAudit Chat System shutting down...")
+#     print(f"Cleaning up {len(chat_manager.sessions)} sessions")
 
 # 包含外部路由（如果可用）
 if external_router is not None:
