@@ -87,7 +87,10 @@ class Settings(BaseSettings):
     METRICS_PORT: int = Field(default=8002, description="指标服务端口")
     
     # 数据库连接URL
-    DATABASE_URL: str = Field(default="sqlite:///./contract_audit.db", description="SQLAlchemy数据库连接URL")
+    DATABASE_URL: str = Field(
+        default="mysql+pymysql://root:password@localhost:3306/contract_audit?charset=utf8mb4", 
+        description="SQLAlchemy数据库连接URL"
+    )
     
     class Config:
         """Pydantic配置"""

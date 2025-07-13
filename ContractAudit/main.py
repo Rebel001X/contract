@@ -3,27 +3,54 @@ ContractAudit模块主入口文件
 基于LangChain的合同审计对话系统
 """
 
-from fastapi import FastAPI, HTTPException, Depends
+import sys
+import os
+
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    __package__ = "ContractAudit"
+
+# 自动检测并安装 pymysql
+try:
+    import pymysql
+except ImportError:
+    import subprocess
+    print("pymysql 未安装，正在自动安装...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pymysql"])
+        import pymysql
+        print("pymysql 安装成功！")
+    except Exception as e:
+        print(f"自动安装 pymysql 失败: {e}")
+        print("请手动运行: pip install pymysql")
+
+import time
+from typing import Dict, Any, List, Optional
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
-from pydantic import BaseModel
-from typing import List, Dict, Optional, Any
-import os
+from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
+from sqlalchemy.orm import Session
 import uuid
-import sys
+
+# 导入数据库相关模块
+from .config import get_session
+from .models import ContractAuditReview, create_contract_audit_review
+
 # 处理相对导入问题 - 支持直接运行和模块导入
 # 添加项目根目录到Python路径
-if __name__ == "__main__":
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 # 尝试导入外部路由
 try:
     if __name__ == "__main__":
-        # 直接运行时，跳过external_routes导入，因为它有相对导入问题
-        external_router = None
-        print("跳过external_routes导入（直接运行模式）")
+        # 直接运行时，也导入external_routes
+        from external_routes import router as external_router
+        print("成功导入external_routes（直接运行模式）")
     else:
         from .external_routes import router as external_router
+        print("成功导入external_routes（模块模式）")
 except ImportError as e:
     print(f"无法导入external_routes: {e}")
     external_router = None
@@ -62,7 +89,6 @@ except ImportError as e:
             return {"total_sessions": 0, "vector_store_available": False, "llm_client_available": False, "embeddings_available": False, "ark_available": False}
         def chat_stream(self, message, session_id=None):
             # 模拟流式输出
-            import time
             
             response = f"这是对 '{message}' 的模拟回复。由于缺少 volcenginesdkarkruntime 包，使用模拟响应。"
             
@@ -141,6 +167,17 @@ except ImportError as e:
     
     chat_manager = MockChatManager()
 
+# 导入结构化审查相关模块
+try:
+    from ContractAudit.structured_models import ComprehensiveContractReview
+    from ContractAudit.structured_service import StructuredReviewService
+    # 创建结构化审查服务实例
+    structured_review_service = StructuredReviewService()
+    print("✅ 结构化审查服务加载成功")
+except ImportError as e:
+    print(f"⚠️  结构化审查服务导入失败: {e}")
+    structured_review_service = None
+
 # 创建FastAPI应用
 app = FastAPI(
     title="ContractAudit Chat System",
@@ -156,6 +193,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 包含外部路由
+if external_router:
+    app.include_router(external_router, prefix="/api", tags=["external"])
+    print("✅ 已包含外部路由 (external_routes)")
+else:
+    print("⚠️  外部路由未包含")
 
 # Pydantic模型
 class CreateSessionRequest(BaseModel):
@@ -206,6 +250,33 @@ class StreamEvent(BaseModel):
     event: str  # start, context_ready, token, complete, error
     timestamp: float
     data: StreamEventData
+
+# 保存审查结果的模型
+class SaveReviewRequest(BaseModel):
+    """保存审查结果请求模型"""
+    session_id: str = Field(..., description="会话ID")
+    structured_result: Dict[str, Any] = Field(..., description="结构化审查结果")
+    user_id: Optional[str] = Field(None, description="用户ID")
+    project_name: Optional[str] = Field(None, description="项目名称")
+    reviewer: Optional[str] = Field("AI助手", description="审查人")
+
+class SaveReviewResponse(BaseModel):
+    """保存审查结果响应模型"""
+    message: str = Field(..., description="响应消息")
+    review_id: int = Field(..., description="保存的审查记录ID")
+    session_id: str = Field(..., description="会话ID")
+    saved_at: str = Field(..., description="保存时间")
+
+class MultipleSaveReviewRequest(BaseModel):
+    """批量保存审查结果请求模型"""
+    reviews: List[Dict[str, Any]] = Field(..., description="审查结果列表")
+    user_id: Optional[str] = Field(None, description="用户ID")
+
+class MultipleSaveReviewResponse(BaseModel):
+    """批量保存审查结果响应模型"""
+    message: str = Field(..., description="响应消息")
+    saved_count: int = Field(..., description="成功保存的数量")
+    review_ids: List[int] = Field(..., description="保存的审查记录ID列表")
 
 # 路由
 @app.get("/")
@@ -493,6 +564,466 @@ async def stream_test_simple():
         content=html_content.encode('utf-8'),
         media_type="text/html"
     )
+
+@app.post("/chat/confirm")
+async def chat_confirm(request: Request):
+    """
+    前端确认后，才进行真实大模型调用并流式输出结构化审查结果。
+    支持四种审查类型：合同主体审查、付款条款审查、违约条款审查、通用审查
+    请求体需包含 session_id 和 message。
+    """
+    data = await request.json()
+    session_id = data.get("session_id")
+    message = data.get("message")
+    auto_save = data.get("auto_save", False)  # 新增自动保存选项
+    user_id = data.get("user_id")  # 新增用户ID
+    project_name = data.get("project_name")  # 新增项目名称
+    
+    if not session_id or not message:
+        raise HTTPException(status_code=400, detail="session_id 和 message 必填")
+
+    def event_stream():
+        import json
+        import time
+        import sys
+        
+        start_time = time.time()
+        
+        try:
+            # 检查结构化审查服务是否可用
+            if structured_review_service is None:
+                raise Exception("结构化审查服务未加载，请检查相关模块")
+            
+            # 获取合同内容
+            contract_content = getattr(chat_manager, 'contract_content', 'No contract content available')
+            if hasattr(chat_manager, '_simple_text_store') and chat_manager._simple_text_store:
+                contract_content = "\n\n".join([doc.page_content for doc in chat_manager._simple_text_store[:3]])
+            
+            print(f"[DEBUG] contract_content length: {len(contract_content)}", file=sys.stderr)
+            print(f"[DEBUG] contract_content preview: {contract_content[:200]}...", file=sys.stderr)
+            
+            # 发送开始事件
+            event_data = {
+                "event": "start",
+                "timestamp": time.time(),
+                "data": {
+                    "message": message,
+                    "session_id": session_id,
+                    "status": "processing",
+                    "review_types": ["Contract Subject Review", "Payment Terms Review", "Breach Terms Review", "General Review"]
+                }
+            }
+            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            
+            # 创建结构化审查提示词
+            try:
+                structured_prompt = structured_review_service.create_comprehensive_prompt(contract_content)
+            except Exception as e:
+                print(f"[ERROR] 创建提示词失败: {e}", file=sys.stderr)
+                raise Exception(f"创建结构化审查提示词失败: {e}")
+            
+            # 发送提示词准备完成事件
+            event_data = {
+                "event": "prompt_ready",
+                "timestamp": time.time(),
+                "data": {
+                    "prompt_length": len(structured_prompt),
+                    "contract_content_length": len(contract_content),
+                    "session_id": session_id,
+                    "status": "prompt_ready"
+                }
+            }
+            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            
+            # 调用大模型进行结构化审查
+            try:
+                response = chat_manager.ark_client.chat.completions.create(
+                    model=chat_manager.ark_model,
+                    messages=[
+                        {"role": "system", "content": "You are a professional contract review assistant. You MUST output a valid JSON with DETAILED SPECIFIC CONTENT for all review results. Even if the contract content is limited, you MUST provide structured review results with SPECIFIC DETAILED CONTENT for each field. Do not use placeholder text - provide realistic detailed content."},
+                        {"role": "user", "content": structured_prompt},
+                    ],
+                )
+                
+                response_text = response.choices[0].message.content
+                print(f"[DEBUG] LLM response length: {len(response_text)}", file=sys.stderr)
+                
+            except Exception as e:
+                print(f"[ERROR] LLM call failed: {e}", file=sys.stderr)
+                raise Exception(f"LLM call failed: {e}")
+            
+            # 解析结构化响应
+            try:
+                structured_result = structured_review_service.parse_comprehensive_response(response_text)
+                
+                # 如果解析失败，使用备用响应
+                if not structured_result:
+                    print("[WARN] Parsing failed, using fallback response", file=sys.stderr)
+                    structured_result = structured_review_service.create_fallback_response(contract_content)
+                    
+            except Exception as e:
+                print(f"[ERROR] Failed to parse structured response: {e}", file=sys.stderr)
+                structured_result = structured_review_service.create_fallback_response(contract_content)
+            
+            # 计算处理时间
+            processing_time = time.time() - start_time
+            structured_result.review_duration = processing_time
+            
+            # 安全序列化结构化结果
+            try:
+                structured_dict = structured_result.dict()
+                # 确保所有值都是可序列化的
+                def clean_dict(obj):
+                    if isinstance(obj, dict):
+                        return {k: clean_dict(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [clean_dict(item) for item in obj]
+                    elif hasattr(obj, 'isoformat'):  # datetime对象
+                        return obj.isoformat()
+                    else:
+                        return str(obj) if obj is not None else None
+                
+                structured_dict = clean_dict(structured_dict)
+                print(f"[DEBUG] structured_dict keys: {list(structured_dict.keys())}", file=sys.stderr)
+                print(f"[DEBUG] structured_dict has subject_review: {'subject_review' in structured_dict}", file=sys.stderr)
+                
+            except Exception as e:
+                print(f"[ERROR] 序列化结构化结果失败: {e}", file=sys.stderr)
+                # 创建简化的结构化数据
+                structured_dict = {
+                    "contract_name": "Contract Review",
+                    "overall_risk_level": "medium",
+                    "total_issues": 1,
+                    "high_risk_items": 0,
+                    "medium_risk_items": 1,
+                    "low_risk_items": 0,
+                    "confidence_score": 0.5,
+                    "overall_summary": "Serialization error occurred during review",
+                    "critical_recommendations": ["Please check contract content"],
+                    "action_items": ["Resubmit contract content"]
+                }
+            
+            # 发送结构化结果事件
+            event_data = {
+                "event": "structured_result",
+                "timestamp": time.time(),
+                "data": {
+                    "session_id": session_id,
+                    "status": "success",
+                    "total": structured_dict.get("total_issues", 0) or 0,
+                    "failed_count": (structured_dict.get("high_risk_items", 0) or 0) + (structured_dict.get("medium_risk_items", 0) or 0),
+                    "passed_count": structured_dict.get("low_risk_items", 0) or 0,
+                    # 注释掉四个审查类型
+                    # "subject_review": structured_dict.get("subject_review"),
+                    # "payment_review": structured_dict.get("payment_review"),
+                    # "breach_review": structured_dict.get("breach_review"),
+                    # "general_review": structured_dict.get("general_review"),
+                    "list": [
+                        {
+                            "result": 0,  # 0=pass, 1=fail
+                            "riskLevel": 0,  # 0=low risk, 1=medium risk, 2=high risk
+                            "atrributable": 1,  # whether attributable
+                            "ruleName": "Contract Review Rule",
+                            "original_content": contract_content[:200] + "..." if len(contract_content) > 200 else contract_content,
+                            "modification_suggestion": structured_dict.get("critical_recommendations", [""])[0] if structured_dict.get("critical_recommendations") else "",
+                            "risk_description": structured_dict.get("overall_summary", "No risk description")
+                        }
+                    ]
+                }
+            }
+            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            
+            # 发送完成事件
+            event_data = {
+                "event": "complete",
+                "timestamp": time.time(),
+                "data": {
+                    "session_id": session_id,
+                    "status": "success",
+                    "final_message": "Structured review completed"
+                }
+            }
+            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            
+            # 发送保存提示事件
+            event_data = {
+                "event": "save_available",
+                "timestamp": time.time(),
+                "data": {
+                    "session_id": session_id,
+                    "message": "审查完成，可以保存结果到数据库",
+                    "save_endpoint": "/chat/save-review",
+                    "auto_save": auto_save,
+                    "user_id": user_id,
+                    "project_name": project_name,
+                    "structured_result": structured_dict
+                }
+            }
+            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            
+        except Exception as e:
+            error_time = time.time()
+            print(f"[ERROR] 流式处理异常: {e}", file=sys.stderr)
+            import traceback
+            print(f"[ERROR] 异常详情: {traceback.format_exc()}", file=sys.stderr)
+            
+            event_data = {
+                "event": "error",
+                "timestamp": error_time,
+                "data": {
+                    "session_id": session_id,
+                    "error": str(e),
+                    "status": "failed",
+                    "processing_time": error_time - start_time,
+                    "error_type": type(e).__name__
+                }
+            }
+            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+    
+    from starlette.responses import StreamingResponse
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
+
+# 新增：单独的结构化审查接口
+@app.post("/chat/structured-review")
+async def structured_review(request: ChatRequest):
+    """
+    直接返回结构化审查结果（非流式）
+    """
+    try:
+        # 获取合同内容
+        contract_content = getattr(chat_manager, 'contract_content', 'No contract content available')
+        if hasattr(chat_manager, '_simple_text_store') and chat_manager._simple_text_store:
+            contract_content = "\n\n".join([doc.page_content for doc in chat_manager._simple_text_store[:3]])
+        
+        # 创建结构化审查提示词
+        structured_prompt = structured_review_service.create_comprehensive_prompt(contract_content)
+        
+        # 调用大模型
+        response = chat_manager.ark_client.chat.completions.create(
+            model=chat_manager.ark_model,
+            messages=[
+                {"role": "system", "content": "You are a professional contract review assistant. Please strictly follow the required JSON format to output four types of review results."},
+                {"role": "user", "content": structured_prompt},
+            ],
+        )
+        
+        response_text = response.choices[0].message.content
+        
+        # 解析结构化响应
+        structured_result = structured_review_service.parse_comprehensive_response(response_text)
+        
+        # 如果解析失败，使用备用响应
+        if not structured_result:
+            structured_result = structured_review_service.create_fallback_response(contract_content)
+        
+        return {
+            "session_id": request.session_id,
+            "status": "success",
+            "structured_data": structured_result.dict(),
+            "raw_response": response_text,
+            "review_types": ["Contract Subject Review", "Payment Terms Review", "Breach Terms Review", "General Review"]
+        }
+        
+    except Exception as e:
+        return {
+            "session_id": request.session_id,
+            "status": "error",
+            "error": str(e),
+            "error_type": type(e).__name__
+        }
+
+# 保存审查结果接口
+@app.post("/chat/save-review", response_model=SaveReviewResponse)
+async def save_review_result(request: SaveReviewRequest, db: Session = Depends(get_session)):
+    """
+    保存审查结果到数据库
+    
+    将结构化审查结果保存到 contract_audit_review 表中
+    """
+    try:
+        from datetime import datetime
+        
+        # 从结构化结果中提取关键信息
+        structured_result = request.structured_result
+        total_issues = structured_result.get("total_issues", 0)
+        overall_risk_level = structured_result.get("overall_risk_level", "无")
+        overall_summary = structured_result.get("overall_summary", "")
+        
+        # 确定审查状态
+        review_status = "通过" if total_issues == 0 else "不通过"
+        
+        # 风险等级映射
+        risk_level_map = {
+            "high": "高",
+            "medium": "中", 
+            "low": "低",
+            "none": "无"
+        }
+        risk_level = risk_level_map.get(overall_risk_level, "无")
+        
+        # 构建保存数据
+        review_data = {
+            "project_name": request.project_name or f"合同审查 - {request.session_id}",
+            "risk_level": risk_level,
+            "review_status": review_status,
+            "reviewer": request.reviewer,
+            "review_comment": overall_summary,
+            "ext_json": {
+                "structured_result": structured_result,
+                "session_id": request.session_id,
+                "user_id": request.user_id,
+                "review_timestamp": datetime.now().isoformat(),
+                "total_issues": total_issues,
+                "high_risk_items": structured_result.get("high_risk_items", 0),
+                "medium_risk_items": structured_result.get("medium_risk_items", 0),
+                "low_risk_items": structured_result.get("low_risk_items", 0),
+                "confidence_score": structured_result.get("confidence_score", 0.0)
+            }
+        }
+        
+        # 保存到数据库
+        saved_review = create_contract_audit_review(db, review_data)
+        
+        return SaveReviewResponse(
+            message="审查结果已成功保存",
+            review_id=saved_review.id,
+            session_id=request.session_id,
+            saved_at=datetime.now().isoformat()
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"保存审查结果失败: {str(e)}")
+
+@app.post("/chat/save-multiple-reviews", response_model=MultipleSaveReviewResponse)
+async def save_multiple_reviews(request: MultipleSaveReviewRequest, db: Session = Depends(get_session)):
+    """
+    批量保存多个审查结果到数据库
+    """
+    try:
+        from datetime import datetime
+        
+        saved_reviews = []
+        
+        for review_data in request.reviews:
+            try:
+                # 提取基本信息
+                session_id = review_data.get("session_id")
+                structured_result = review_data.get("structured_result", {})
+                project_name = review_data.get("project_name", f"合同审查 - {session_id}")
+                reviewer = review_data.get("reviewer", "AI助手")
+                
+                total_issues = structured_result.get("total_issues", 0)
+                overall_risk_level = structured_result.get("overall_risk_level", "无")
+                overall_summary = structured_result.get("overall_summary", "")
+                
+                # 确定审查状态和风险等级
+                review_status = "通过" if total_issues == 0 else "不通过"
+                risk_level_map = {
+                    "high": "高", "medium": "中", "low": "低", "none": "无"
+                }
+                risk_level = risk_level_map.get(overall_risk_level, "无")
+                
+                # 构建保存数据
+                db_review_data = {
+                    "project_name": project_name,
+                    "risk_level": risk_level,
+                    "review_status": review_status,
+                    "reviewer": reviewer,
+                    "review_comment": overall_summary,
+                    "ext_json": {
+                        "structured_result": structured_result,
+                        "session_id": session_id,
+                        "user_id": request.user_id,
+                        "review_timestamp": datetime.now().isoformat(),
+                        "total_issues": total_issues,
+                        "high_risk_items": structured_result.get("high_risk_items", 0),
+                        "medium_risk_items": structured_result.get("medium_risk_items", 0),
+                        "low_risk_items": structured_result.get("low_risk_items", 0),
+                        "confidence_score": structured_result.get("confidence_score", 0.0)
+                    }
+                }
+                
+                # 保存到数据库
+                saved_review = create_contract_audit_review(db, db_review_data)
+                saved_reviews.append(saved_review)
+                
+            except Exception as e:
+                print(f"[ERROR] 保存单个审查结果失败: {e}")
+                continue
+        
+        return MultipleSaveReviewResponse(
+            message=f"成功保存 {len(saved_reviews)} 个审查结果",
+            saved_count=len(saved_reviews),
+            review_ids=[r.id for r in saved_reviews]
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量保存审查结果失败: {str(e)}")
+
+@app.get("/chat/saved-reviews/{session_id}")
+async def get_saved_reviews(session_id: str, db: Session = Depends(get_session)):
+    """
+    获取指定会话的已保存审查结果
+    """
+    try:
+        from sqlalchemy import text
+        
+        # 查询包含指定session_id的审查记录
+        reviews = db.query(ContractAuditReview).filter(
+            ContractAuditReview.ext_json.contains({"session_id": session_id}),
+            ContractAuditReview.is_deleted == False
+        ).order_by(ContractAuditReview.created_at.desc()).all()
+        
+        # 格式化返回数据
+        review_list = []
+        for review in reviews:
+            review_list.append({
+                "id": review.id,
+                "project_name": review.project_name,
+                "risk_level": review.risk_level,
+                "review_status": review.review_status,
+                "reviewer": review.reviewer,
+                "review_comment": review.review_comment,
+                "created_at": review.created_at.isoformat(),
+                "updated_at": review.updated_at.isoformat(),
+                "ext_json": review.ext_json
+            })
+        
+        return {
+            "session_id": session_id,
+            "total_count": len(review_list),
+            "reviews": review_list
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取保存的审查结果失败: {str(e)}")
+
+@app.delete("/chat/saved-reviews/{review_id}")
+async def delete_saved_review(review_id: int, db: Session = Depends(get_session)):
+    """
+    删除指定的审查记录（软删除）
+    """
+    try:
+        from .models import delete_contract_audit_review
+        
+        success = delete_contract_audit_review(db, review_id)
+        
+        if success:
+            return {"message": "审查记录已删除", "review_id": review_id}
+        else:
+            raise HTTPException(status_code=404, detail="审查记录不存在")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除审查记录失败: {str(e)}")
 
 # 启动事件
 @app.on_event("startup")

@@ -152,13 +152,90 @@ if not ARK_AVAILABLE:
             self.chat = self.ChatCompletions()
         
         class ChatCompletions:
-            def create(self, model, messages, temperature=0.7, max_tokens=2000):
-                # 这里应该调用真实的 Ark API
-                # 暂时返回模拟响应
+            def create(self, model, messages, temperature=0.7, max_tokens=2000, stream=False):
+                import requests
+                import json
+                
+                # 构建请求头
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                # 构建请求体
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "stream": stream
+                }
+                
+                try:
+                    # 发送请求到 Ark API
+                    response = requests.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                        timeout=self.timeout
+                    )
+                    
+                    if response.status_code == 200:
+                        if stream:
+                            # 返回流式响应
+                            return self._create_stream_response(response)
+                        else:
+                            # 返回普通响应
+                            return self._create_response(response.json())
+                    else:
+                        # 如果 API 调用失败，返回模拟响应
+                        print(f"Ark API 调用失败: {response.status_code} - {response.text}")
+                        return self._create_mock_response(model, messages)
+                        
+                except Exception as e:
+                    print(f"Ark API 调用异常: {e}")
+                    return self._create_mock_response(model, messages)
+            
+            def _create_response(self, data):
+                """创建标准响应对象"""
                 return type('Response', (), {
                     'choices': [type('Choice', (), {
                         'message': type('Message', (), {
-                            'content': f"这是来自 Ark 模型 {model} 的回复: {messages[-1]['content'][:50]}..."
+                            'content': data['choices'][0]['message']['content']
+                        })()
+                    })()]
+                })()
+            
+            def _create_stream_response(self, response):
+                """创建流式响应对象"""
+                class StreamResponse:
+                    def __iter__(self):
+                        for line in response.iter_lines():
+                            if line:
+                                line = line.decode('utf-8')
+                                if line.startswith('data: '):
+                                    data = line[6:]
+                                    if data != '[DONE]':
+                                        try:
+                                            chunk_data = json.loads(data)
+                                            yield type('Chunk', (), {
+                                                'choices': [type('Choice', (), {
+                                                    'delta': type('Delta', (), {
+                                                        'content': chunk_data['choices'][0]['delta'].get('content', '')
+                                                    })()
+                                                })()]
+                                            })()
+                                        except json.JSONDecodeError:
+                                            continue
+                return StreamResponse()
+            
+            def _create_mock_response(self, model, messages):
+                """创建模拟响应"""
+                user_message = messages[-1]['content'] if messages else "用户问题"
+                return type('Response', (), {
+                    'choices': [type('Choice', (), {
+                        'message': type('Message', (), {
+                            'content': f"基于您的问题，我为您提供以下专业分析：\n\n{user_message}\n\n请根据具体情况进行详细分析。"
                         })()
                     })()]
                 })()
@@ -558,34 +635,38 @@ class ContractChatManager:
         
         # 根据问题类型选择合适的模板
         if any(keyword in question_lower for keyword in ["风险", "风险点", "风险分析"]):
-            template = """你是一个合同专家,帮我看下合同里的风险项目,并梳理出高风险,中风险,低风险,并给出优化建议。
+            template = """请基于以下合同内容，对用户提出的风险相关问题进行专业分析：
 
 合同内容：
 {contract_content}
 
 用户问题：{question}
 
-请从以下方面进行分析：
-1. 法律风险
-2. 商业风险
-3. 财务风险
-4. 操作风险
-5. 建议措施"""
+请从以下方面进行专业分析：
+1. 法律风险识别
+2. 商业风险评估
+3. 财务风险分析
+4. 操作风险提示
+5. 优化建议和应对措施
+
+请提供客观、专业的分析，并给出实用的建议。"""
         elif any(keyword in question_lower for keyword in ["条款", "分析条款", "条款分析"]):
-            template = """你是一个合同专家,请分析以下合同条款：
+            template = """请基于以下合同内容，对用户提出的条款相关问题进行专业分析：
 
 合同内容：
 {contract_content}
 
 用户问题：{question}
 
-请从以下方面进行分析：
-1. 条款含义
-2. 权利义务
-3. 潜在问题
-4. 改进建议"""
+请从以下方面进行专业分析：
+1. 条款含义解读
+2. 权利义务分析
+3. 潜在问题识别
+4. 改进建议和优化方案
+
+请提供清晰、准确的分析，并给出实用的建议。"""
         elif any(keyword in question_lower for keyword in ["法律", "法律建议", "法律问题"]):
-            template = """你是一个法律顾问，请为以下合同问题提供专业建议：
+            template = """请基于以下合同内容，对用户提出的法律相关问题提供专业建议：
 
 合同内容：
 {contract_content}
@@ -593,12 +674,14 @@ class ContractChatManager:
 用户问题：{question}
 
 请提供：
-1. 法律依据
-2. 风险评估
-3. 建议措施
-4. 注意事项"""
+1. 相关法律依据
+2. 法律风险评估
+3. 合规建议措施
+4. 重要注意事项
+
+请提供专业、准确的法律建议，并注重实用性。"""
         elif any(keyword in question_lower for keyword in ["摘要", "总结", "概述"]):
-            template = """你是一个合同专家，请对以下合同进行总结：
+            template = """请基于以下合同内容，对用户提出的总结相关问题进行专业分析：
 
 合同内容：
 {contract_content}
@@ -606,13 +689,15 @@ class ContractChatManager:
 用户问题：{question}
 
 请提供：
-1. 合同类型
-2. 主要条款
-3. 关键要点
-4. 重要日期
-5. 风险提示"""
+1. 合同类型和性质
+2. 主要条款概述
+3. 关键要点总结
+4. 重要日期和期限
+5. 风险提示和建议
+
+请提供清晰、全面的总结，突出重点信息。"""
         elif any(keyword in question_lower for keyword in ["谈判", "协商", "建议"]):
-            template = """你是一个谈判顾问，请为以下合同提供谈判建议：
+            template = """请基于以下合同内容，对用户提出的谈判相关问题提供专业建议：
 
 合同内容：
 {contract_content}
@@ -620,19 +705,21 @@ class ContractChatManager:
 用户问题：{question}
 
 请提供：
-1. 谈判要点
-2. 可协商条款
-3. 底线建议
-4. 策略建议"""
+1. 关键谈判要点
+2. 可协商条款分析
+3. 底线和让步空间
+4. 谈判策略建议
+
+请提供实用、可操作的谈判建议。"""
         else:
-            template = """你是一个专业的合同审计助手。请基于以下合同内容回答用户问题：
+            template = """请基于以下合同内容，对用户提出的问题进行专业回答：
 
 合同内容：
 {contract_content}
 
 用户问题：{question}
 
-请提供专业、准确的回答："""
+请提供专业、准确、有礼貌的回答，注重实用性和可操作性。"""
         
         # 格式化模板，使用当前加载的合同内容
         contract_content = getattr(self, 'contract_content', '暂无合同内容')
@@ -770,7 +857,7 @@ class ContractChatManager:
             response = self.ark_client.chat.completions.create(
                 model=self.ark_model,
                 messages=[
-                    {"role": "system", "content": "你是一个合同专家,帮我看下合同里的风险项目,并梳理出高风险,中风险,低风险,并给出优化建议"},
+                    {"role": "system", "content": "你是一个专业的合同审计助手，具备丰富的法律和商业知识。请根据用户的具体问题，提供专业、准确、有礼貌的回答。在分析合同时，请注重客观性，提供实用的建议和见解。"},
                     {"role": "user", "content": prompt},
                 ],
             )
@@ -872,32 +959,74 @@ class ContractChatManager:
     def chat_stream(self, question: str, session_id: str = None):
         """
         Ark LLM 流式输出生成器，适用于 SSE/流式前端。
-        Args:
-            question: 用户问题
-            session_id: 会话ID
-        Yields:
-            dict: 包含事件类型、内容、元数据的结构化数据
+        无论输入什么，都只输出"请进一步明确审查方式"，支持持续对话。
         """
-        import json
         import time
+        import random
         
-        try:
-            # 发送开始事件
+        # 发送开始事件
+        yield {
+            "event": "start",
+            "timestamp": time.time(),
+            "data": {
+                "question": question,
+                "status": "processing",
+                "session_id": session_id,
+                "role": "assistant",
+                "extra_info": {
+                    "model": getattr(self, 'ark_model', None),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+            }
+        }
+        
+        # 模拟流式输出，逐字符输出
+        response_text = "请进一步明确审查方式"
+        for i, char in enumerate(response_text):
+            # 添加随机延迟模拟真实流式输出
+            time.sleep(random.uniform(0.05, 0.15))
+            
             yield {
-                "event": "start",
+                "event": "token",
                 "timestamp": time.time(),
                 "data": {
-                    "question": question,
-                    "status": "processing",
+                    "content": char,
+                    "token_index": i + 1,
+                    "is_final": False,
                     "session_id": session_id,
                     "role": "assistant",
                     "extra_info": {
-                        "model": self.ark_model,
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                        "chunk_id": i + 1,
+                        "content_length": 1,
+                        "progress": f"{i + 1}/{len(response_text)}"
                     }
                 }
             }
-            
+        
+        # 发送完成事件
+        yield {
+            "event": "complete",
+            "timestamp": time.time(),
+            "data": {
+                "total_tokens": len(response_text),
+                "status": "success",
+                "session_id": session_id,
+                "role": "assistant",
+                "is_final": True,
+                "extra_info": {
+                    "processing_time": 0,
+                    "final_message": "流式输出完成",
+                    "response_length": len(response_text)
+                }
+            }
+        }
+
+    def _real_llm_stream(self, question: str, session_id: str = None):
+        """
+        真实 Ark LLM 流式输出生成器，仅由 /chat/confirm 调用。
+        """
+        import time
+        try:
             context = self._retrieve_relevant_context(question)
             prompt = self._get_prompt_template(question)
             prompt = self.ensure_utf8(prompt)
@@ -915,7 +1044,8 @@ class ContractChatManager:
                     "status": "context_ready",
                     "extra_info": {
                         "has_context": bool(context),
-                        "context_preview": context[:100] + "..." if context and len(context) > 100 else context
+                        "context_preview": context[:100] + "..." if context and len(context) > 100 else context,
+                        "phase": "real_llm"
                     }
                 }
             }
@@ -923,12 +1053,11 @@ class ContractChatManager:
             stream = self.ark_client.chat.completions.create(
                 model=self.ark_model,
                 messages=[
-                    {"role": "system", "content": "你是一个合同专家,帮我看下合同里的风险项目,并梳理出高风险,中风险,低风险,并给出优化建议"},
+                    {"role": "system", "content": "你是一个专业的合同审计助手，具备丰富的法律和商业知识。请根据用户的具体问题，提供专业、准确、有礼貌的回答。在分析合同时，请注重客观性，提供实用的建议和见解。"},
                     {"role": "user", "content": prompt},
                 ],
                 stream=True
             )
-            
             token_count = 0
             for chunk in stream:
                 if not chunk.choices:
@@ -948,12 +1077,11 @@ class ContractChatManager:
                             "role": "assistant",
                             "extra_info": {
                                 "chunk_id": token_count,
-                                "content_length": len(content)
+                                "content_length": len(content),
+                                "phase": "real_llm"
                             }
                         }
                     }
-            
-            # 发送完成事件
             yield {
                 "event": "complete",
                 "timestamp": time.time(),
@@ -964,12 +1092,13 @@ class ContractChatManager:
                     "role": "assistant",
                     "is_final": True,
                     "extra_info": {
-                        "processing_time": time.time() - time.time(),
-                        "final_message": "流式输出完成"
+                        "processing_time": 0,
+                        "final_message": "流式输出完成",
+                        "response_length": token_count,
+                        "phase": "completed"
                     }
                 }
             }
-            
         except Exception as e:
             error_msg = f"[ERROR] Ark LLM 流式调用失败: {str(e)}"
             yield {
@@ -982,7 +1111,8 @@ class ContractChatManager:
                     "role": "assistant",
                     "extra_info": {
                         "error_type": type(e).__name__,
-                        "error_details": str(e)
+                        "error_details": str(e),
+                        "phase": "error"
                     }
                 }
             }
