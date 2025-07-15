@@ -625,9 +625,11 @@ async def chat_confirm(request: Request):
         review_stage = message_data.get("reviewStage")
         review_list_count = message_data.get("reviewList", 0)
         review_rules = message_data.get("reviewRules", [])
+        contract_id = message_data.get("contract_id")  # 新增：从message中提取合同ID
         print(f"[DEBUG] 解析到审查规则: {len(review_rules)} 条规则", file=sys.stderr)
     except (json.JSONDecodeError, TypeError):
         # 如果不是 JSON 格式，当作普通消息处理
+        contract_id = None
         print(f"[DEBUG] message 不是 JSON 格式，作为普通消息处理: {message}", file=sys.stderr)
         pass
 
@@ -1136,8 +1138,8 @@ async def chat_confirm(request: Request):
                             'issues': rule_result.get('issues', []),
                             'suggestions': rule_result.get('suggestions', []),
                             'confidence_score': int(confidence_score * 100),
-                            # 新增 user_feedback 字段，优先取规则原始数据中的 user_feedback，否则为 None
-                            'user_feedback': rule_result.get('user_feedback', None)
+                            'user_feedback': rule_result.get('user_feedback', None),
+                            'contract_id': contract_id  # 新增：存合同ID
                         }
                         log_debug(f"[DEBUG] 构建的 result_data: {result_data}")
                         rule_results_data.append(result_data)

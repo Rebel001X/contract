@@ -1050,6 +1050,33 @@ def paginated_confirm_review_rule_results(
         items=[ConfirmReviewRuleResultOut.from_orm(obj) for obj in results]
     )
 
+@router.get("/confirm-review-rule-results/created-times")
+def get_confirm_rule_result_created_times(
+    contract_id: str = Query(None, description="合同ID，可选"),
+    db: Session = Depends(get_session)
+):
+    """
+    获取所有规则结果的去重创建日期（可按合同ID筛选，用于下拉筛选）
+    """
+    from sqlalchemy import func
+    query = db.query(func.date(ConfirmReviewRuleResult.created_at))
+    if contract_id:
+        query = query.filter(ConfirmReviewRuleResult.contract_id == contract_id)
+    dates = query.distinct().order_by(func.date(ConfirmReviewRuleResult.created_at).desc()).all()
+    date_list = [str(d[0]) for d in dates if d[0] is not None]
+    return {"dates": date_list}
+
+@router.get("/confirm-review-rule-results/by-contract", response_model=List[ConfirmReviewRuleResultOut])
+def get_rule_results_by_contract_id(
+    contract_id: str = Query(..., description="合同ID"),
+    db: Session = Depends(get_session)
+):
+    """
+    通过合同ID获取所有规则结果
+    """
+    results = db.query(ConfirmReviewRuleResult).filter(ConfirmReviewRuleResult.contract_id == contract_id).order_by(ConfirmReviewRuleResult.id.desc()).all()
+    return [ConfirmReviewRuleResultOut.from_orm(obj) for obj in results]
+
 if __name__ == "__main__":
     import sys, os
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
