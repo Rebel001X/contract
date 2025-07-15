@@ -226,6 +226,11 @@ class ConfirmReviewRuleResult(Base):
     # 用户反馈 (0=点踩, 1=点赞, null=无反馈)
     user_feedback = Column(Integer, nullable=True, comment='用户反馈(0=点踩, 1=点赞, null=无反馈)')
     
+    # 新增字段：反馈建议和审核状态
+    feedback_suggestion = Column(Text, nullable=True, comment='反馈建议内容')
+    is_approved = Column(Boolean, nullable=True, comment='审核是否通过标志')
+    contract_id = Column(String(255), nullable=True, comment='合同ID')
+    
     # 时间戳
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, comment='创建时间')
 

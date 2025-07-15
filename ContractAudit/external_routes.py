@@ -779,6 +779,9 @@ class ConfirmReviewRuleResultOut(BaseModel):
     suggestions: Optional[list] = None
     confidence_score: int
     user_feedback: Optional[int] = None  # 0=点踩, 1=点赞, null=无反馈
+    feedback_suggestion: Optional[str] = None  # 反馈建议内容
+    is_approved: Optional[bool] = None  # 审核是否通过标志
+    contract_id: Optional[str] = None  # 合同ID
     created_at: Optional[str] = None
 
     class Config:
@@ -801,6 +804,9 @@ class ConfirmReviewRuleResultOut(BaseModel):
             'suggestions': obj.suggestions,
             'confidence_score': obj.confidence_score,
             'user_feedback': obj.user_feedback,
+            'feedback_suggestion': obj.feedback_suggestion,
+            'is_approved': obj.is_approved,
+            'contract_id': obj.contract_id,
             'created_at': obj.created_at.isoformat() if obj.created_at else None
         }
         return cls(**data)
@@ -819,6 +825,9 @@ class ConfirmReviewRuleResultIn(BaseModel):
     suggestions: Optional[list] = None
     confidence_score: int = 50
     user_feedback: Optional[int] = None  # 0=点踩, 1=点赞, null=无反馈
+    feedback_suggestion: Optional[str] = None  # 反馈建议内容
+    is_approved: Optional[bool] = None  # 审核是否通过标志
+    contract_id: Optional[str] = None  # 合同ID
 
 class ConfirmReviewDetailOut(BaseModel):
     """Confirm审查详情输出模型"""
@@ -945,27 +954,48 @@ def delete_confirm_rule_result(id: int, db: Session = Depends(get_session)):
 class UserFeedbackRequest(BaseModel):
     rule_id: int = Field(..., description="规则ID")
     feedback: int = Field(..., description="用户反馈: 0=点踩, 1=点赞")
+    feedback_suggestion: Optional[str] = Field(None, description="反馈建议内容")
+    is_approved: Optional[bool] = Field(None, description="审核是否通过标志")
+    contract_id: Optional[str] = Field(None, description="合同ID")
 
 @router.post("/confirm-review-rule-result/feedback")
 def update_user_feedback_by_rule_id(request: UserFeedbackRequest = Body(...), db: Session = Depends(get_session)):
     """
-    用 rule_id 点赞/点踩（前端只需传 rule_id 和 feedback）
+    用 rule_id 点赞/点踩（支持反馈建议和审核状态）
     """
     rule_id = getattr(request, 'rule_id', None)
     feedback = getattr(request, 'feedback', None)
+    feedback_suggestion = getattr(request, 'feedback_suggestion', None)
+    is_approved = getattr(request, 'is_approved', None)
+    
     if rule_id is None or feedback not in [0, 1]:
         raise HTTPException(status_code=400, detail="必须提供 rule_id 和 feedback(0或1)")
+    
     obj = db.query(ConfirmReviewRuleResult).filter(ConfirmReviewRuleResult.rule_id == rule_id).order_by(ConfirmReviewRuleResult.id.desc()).first()
     if not obj:
         raise HTTPException(status_code=404, detail="规则结果不存在")
+    
+    # 更新用户反馈
     obj.user_feedback = feedback
+    
+    # 更新反馈建议（如果提供）
+    if feedback_suggestion is not None:
+        obj.feedback_suggestion = feedback_suggestion
+    
+    # 更新审核状态（如果提供）
+    if is_approved is not None:
+        obj.is_approved = is_approved
+    
     db.commit()
     db.refresh(obj)
+    
     feedback_text = "点赞" if feedback == 1 else "点踩"
     return {
         "code": 200,
         "message": f"{feedback_text}成功",
         "user_feedback": obj.user_feedback,
+        "feedback_suggestion": obj.feedback_suggestion,
+        "is_approved": obj.is_approved,
         "rule_id": rule_id,
         "id": obj.id
     }
@@ -997,7 +1027,7 @@ class PaginatedConfirmReviewRuleResult(BaseModel):
     total: int
     items: List['ConfirmReviewRuleResultOut']
 
-@router.get("/confirm-review-rule-result/page", response_model=PaginatedConfirmReviewRuleResult)
+@router.get("/confirm-review-rule-results/page", response_model=PaginatedConfirmReviewRuleResult)
 def paginated_confirm_review_rule_results(
     rule_id: Optional[int] = Query(None),
     session_id: Optional[str] = Query(None),
