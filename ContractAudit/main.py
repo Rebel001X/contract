@@ -6,6 +6,11 @@ ContractAudit模块主入口文件
 import sys
 import os
 from contextlib import asynccontextmanager
+import os
+LOG_PATH = os.path.join(os.path.dirname(__file__), 'confirm_debug.log')
+def log_debug(msg):
+    with open(LOG_PATH, 'a', encoding='utf-8') as f:
+        f.write(msg + '\n')
 
 if __name__ == "__main__" and (__package__ is None or __package__ == ""):
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,7 +32,7 @@ except ImportError:
 
 import time
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
@@ -176,10 +181,10 @@ except ImportError as e:
 # 导入结构化审查相关模块
 try:
     if __name__ == "__main__":
-        from structured_models import ComprehensiveContractReview
+        from structured_models import ComprehensiveContractReview, ContractSubjectReview, PaymentClauseReview, BreachClauseReview, GeneralReview
         from structured_service import StructuredReviewService
     else:
-        from .structured_models import ComprehensiveContractReview
+        from .structured_models import ComprehensiveContractReview, ContractSubjectReview, PaymentClauseReview, BreachClauseReview, GeneralReview
         from .structured_service import StructuredReviewService
     # 创建结构化审查服务实例
     structured_review_service = StructuredReviewService()
@@ -591,11 +596,14 @@ async def stream_test_simple():
 
 @app.post("/chat/confirm")
 async def chat_confirm(request: Request):
+    log_debug("收到confirm请求")
+    print("收到confirm请求")
     """
     前端确认后，才进行真实大模型调用并流式输出结构化审查结果。
-    支持四种审查类型：合同主体审查、付款条款审查、违约条款审查、通用审查
+    支持审查规则解析和四种审查类型：合同主体审查、付款条款审查、违约条款审查、通用审查
     请求体需包含 session_id 和 message。
     """
+    import json
     data = await request.json()
     session_id = data.get("session_id")
     message = data.get("message")
@@ -605,15 +613,36 @@ async def chat_confirm(request: Request):
     
     if not session_id or not message:
         raise HTTPException(status_code=400, detail="session_id 和 message 必填")
+    
+    # 解析 message 中的审查规则信息
+    review_rules = None
+    review_stage = None
+    review_list_count = 0
+    
+    try:
+        # 尝试解析 message 为 JSON
+        message_data = json.loads(message)
+        review_stage = message_data.get("reviewStage")
+        review_list_count = message_data.get("reviewList", 0)
+        review_rules = message_data.get("reviewRules", [])
+        print(f"[DEBUG] 解析到审查规则: {len(review_rules)} 条规则", file=sys.stderr)
+    except (json.JSONDecodeError, TypeError):
+        # 如果不是 JSON 格式，当作普通消息处理
+        print(f"[DEBUG] message 不是 JSON 格式，作为普通消息处理: {message}", file=sys.stderr)
+        pass
 
-    def event_stream():
+    async def event_stream():
         import json
         import time
         import sys
+        import asyncio
         
         start_time = time.time()
         
         try:
+            # 规则id到原始rule的映射，便于查找分组信息
+            rule_id_to_rule = {rule.get('id', 0): rule for rule in review_rules} if review_rules else {}
+            
             # 检查结构化审查服务是否可用
             if structured_review_service is None:
                 raise Exception("结构化审查服务未加载，请检查相关模块")
@@ -634,60 +663,329 @@ async def chat_confirm(request: Request):
                     "message": message,
                     "session_id": session_id,
                     "status": "processing",
-                    "review_types": ["Contract Subject Review", "Payment Terms Review", "Breach Terms Review", "General Review"]
+                    "review_stage": review_stage,
+                    "review_rules_count": len(review_rules) if review_rules else 0,
+                    "review_types": [f"Rule {i+1}: {rule.get('ruleName', '未命名规则')}" for i, rule in enumerate(review_rules)] if review_rules else []
                 }
             }
             yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
             
-            # 创建结构化审查提示词
-            try:
-                structured_prompt = structured_review_service.create_comprehensive_prompt(contract_content)
-            except Exception as e:
-                print(f"[ERROR] 创建提示词失败: {e}", file=sys.stderr)
-                raise Exception(f"创建结构化审查提示词失败: {e}")
-            
-            # 发送提示词准备完成事件
-            event_data = {
-                "event": "prompt_ready",
-                "timestamp": time.time(),
-                "data": {
-                    "prompt_length": len(structured_prompt),
-                    "contract_content_length": len(contract_content),
-                    "session_id": session_id,
-                    "status": "prompt_ready"
+            # 如果有审查规则，处理审查规则
+            if review_rules and len(review_rules) > 0:
+                print(f"[DEBUG] 开始处理 {len(review_rules)} 条审查规则", file=sys.stderr)
+                
+                # 发送规则处理开始事件
+                event_data = {
+                    "event": "rules_processing_started",
+                    "timestamp": time.time(),
+                    "data": {
+                        "session_id": session_id,
+                        "status": "rules_processing",
+                        "total_rules": len(review_rules),
+                        "processed_rules": 0,
+                        "message": f"开始处理 {len(review_rules)} 条审查规则"
+                    }
                 }
-            }
-            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
-            
-            # 调用大模型进行结构化审查
-            try:
-                response = chat_manager.ark_client.chat.completions.create(
-                    model=chat_manager.ark_model,
-                    messages=[
-                        {"role": "system", "content": "You are a professional contract review assistant. You MUST output a valid JSON with DETAILED SPECIFIC CONTENT for all review results. Even if the contract content is limited, you MUST provide structured review results with SPECIFIC DETAILED CONTENT for each field. Do not use placeholder text - provide realistic detailed content."},
-                        {"role": "user", "content": structured_prompt},
-                    ],
-                )
+                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
                 
-                response_text = response.choices[0].message.content
-                print(f"[DEBUG] LLM response length: {len(response_text)}", file=sys.stderr)
+                # 异步处理每个审查规则
+                rule_results = []
+                processed_count = 0
+                
+                async def process_single_rule(rule, rule_index):
+                    """处理单个审查规则"""
+                    try:
+                        from volcenginesdkarkruntime import AsyncArk
+                        
+                        # 创建异步Ark客户端
+                        async_ark_client = AsyncArk(
+                            api_key=chat_manager.ark_api_key,
+                        )
+                        
+                        # 构建规则审查提示词
+                        rule_prompt = f"""
+你是一个专业的合同审查助手。请根据以下审查规则对合同内容进行分析。
+
+审查规则信息：
+- 规则名称：{rule.get('ruleName', '未命名规则')}
+- 规则类型：{rule.get('type', '未知类型')}
+- 风险等级：{rule.get('riskLevel', '未知等级')}
+- 风险归属：{rule.get('riskAttributionName', '未知归属')}
+- 规则分组：{rule.get('ruleGroupName', '未分组')}
+- 修改意见：{rule.get('reviseOpinion', '无')}
+
+条件信息：
+{rule.get('conditionList', [])}
+
+合同内容：
+{contract_content}
+
+请输出以下格式的JSON（必须使用中文）：
+{{
+    "rule_id": {rule.get('id', 0)},
+    "rule_name": "{rule.get('ruleName', '未命名规则')}",
+    "review_result": "通过|不通过",
+    "risk_level": "high|medium|low|none",
+    "matched_content": "匹配到的合同内容片段",
+    "analysis": "详细的分析说明",
+    "issues": [
+        "具体问题1的详细描述",
+        "具体问题2的详细描述"
+    ],
+    "suggestions": [
+        "具体建议1，包含可执行的步骤",
+        "具体建议2，包含可执行的步骤"
+    ],
+    "confidence_score": 0.85
+}}
+
+重要要求：
+1. 必须输出有效的JSON格式
+2. 必须使用中文输出所有内容
+3. 根据规则条件对合同内容进行匹配分析
+4. 提供详细的分析说明和具体建议
+5. 如果合同内容不匹配规则条件，也要给出合理的分析结果
+"""
+                        
+                        # 调用模型进行规则审查
+                        response = await async_ark_client.chat.completions.create(
+                            model=chat_manager.ark_model,
+                            messages=[
+                                {"role": "system", "content": "你是一个专业的合同审查助手，必须输出有效的JSON格式，所有内容必须使用中文。"},
+                                {"role": "user", "content": rule_prompt},
+                            ],
+                        )
+                        
+                        response_text = response.choices[0].message.content
+                        
+                        # 解析响应
+                        try:
+                            rule_result = json.loads(response_text)
+                            rule_result['rule_index'] = rule_index
+                            rule_result['rule_id'] = rule.get('id', 0)
+                            rule_result['rule_name'] = rule.get('ruleName', '未命名规则')
+                            return rule_result
+                        except json.JSONDecodeError:
+                            print(f"[WARN] 规则 {rule.get('ruleName')} JSON解析失败，使用默认结果", file=sys.stderr)
+                            return {
+                                "rule_id": rule.get('id', 0),
+                                "rule_name": rule.get('ruleName', '未命名规则'),
+                                "review_result": "不通过",
+                                "risk_level": "medium",
+                                "matched_content": "无法解析响应",
+                                "analysis": "模型响应解析失败",
+                                "issues": ["响应格式错误"],
+                                "suggestions": ["重新审查规则"],
+                                "confidence_score": 0.5,
+                                "rule_index": rule_index
+                            }
+                            
+                    except Exception as e:
+                        print(f"[ERROR] 处理规则 {rule.get('ruleName')} 失败: {e}", file=sys.stderr)
+                        return {
+                            "rule_id": rule.get('id', 0),
+                            "rule_name": rule.get('ruleName', '未命名规则'),
+                            "review_result": "不通过",
+                            "risk_level": "high",
+                            "matched_content": "处理失败",
+                            "analysis": f"规则处理异常: {str(e)}",
+                            "issues": ["规则处理失败"],
+                            "suggestions": ["检查规则配置"],
+                            "confidence_score": 0.3,
+                            "rule_index": rule_index
+                        }
+                
+                # 创建规则处理任务
+                rule_tasks = [process_single_rule(rule, i) for i, rule in enumerate(review_rules)]
+                
+                # 实时处理完成的规则
+                for completed_rule_task in asyncio.as_completed(rule_tasks):
+                    try:
+                        rule_result = await completed_rule_task
+                        processed_count += 1
+                        
+                        print(f"[DEBUG] 规则 {rule_result['rule_name']} 处理完成 ({processed_count}/{len(review_rules)})", file=sys.stderr)
+                        
+                        rule_results.append(rule_result)
+                        
+                        # 在 rule_completed 事件前，补充分组和枚举
+                        rule_group_id = rule_id_to_rule.get(rule_result.get("rule_id", 0), {}).get("ruleGroupId")
+                        rule_group_name = rule_id_to_rule.get(rule_result.get("rule_id", 0), {}).get("ruleGroupName")
+                        review_result_enum = "FAIL" if rule_result.get("review_result") in ["不通过", "FAIL"] else "PASS"
+                        completed_rule = dict(rule_result)
+                        completed_rule["ruleGroupId"] = rule_group_id
+                        completed_rule["ruleGroupName"] = rule_group_name
+                        completed_rule["review_result"] = review_result_enum
+                        # 发送单个规则完成事件
+                        event_data = {
+                            "event": "rule_completed",
+                            "timestamp": time.time(),
+                            "data": {
+                                "session_id": session_id,
+                                "status": "rule_completed",
+                                "completed_rule": completed_rule,
+                                "processed_count": processed_count,
+                                "total_rules": len(review_rules),
+                                "message": f"规则 {rule_result['rule_name']} 审查完成"
+                            }
+                        }
+                        yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                        
+                    except Exception as e:
+                        processed_count += 1
+                        print(f"[ERROR] 规则处理异常: {e}", file=sys.stderr)
+                        
+                        # 发送规则失败事件
+                        event_data = {
+                            "event": "rule_failed",
+                            "timestamp": time.time(),
+                            "data": {
+                                "session_id": session_id,
+                                "status": "rule_failed",
+                                "failed_rule_index": processed_count - 1,
+                                "processed_count": processed_count,
+                                "total_rules": len(review_rules),
+                                "error": str(e),
+                                "message": f"规则 {processed_count} 处理失败"
+                            }
+                        }
+                        yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                
+                # 发送规则处理完成事件
+                event_data = {
+                    "event": "rules_processing_completed",
+                    "timestamp": time.time(),
+                    "data": {
+                        "session_id": session_id,
+                        "status": "rules_completed",
+                        "total_rules": len(review_rules),
+                        "processed_rules": len(rule_results),
+                        "rule_results": rule_results,
+                        "message": f"所有 {len(review_rules)} 条审查规则处理完成"
+                    }
+                }
+                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            
+            # 如果没有审查规则，返回错误
+            if not review_rules or len(review_rules) == 0:
+                event_data = {
+                    "event": "error",
+                    "timestamp": time.time(),
+                    "data": {
+                        "session_id": session_id,
+                        "error": "未提供审查规则",
+                        "status": "failed",
+                        "message": "请在前端message中提供审查规则"
+                    }
+                }
+                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                return
+            
+            # 构建基于规则的综合结果
+            try:
+                # 计算统计信息
+                total_issues = 0
+                high_risk_items = 0
+                medium_risk_items = 0
+                low_risk_items = 0
+                critical_recommendations = []
+                action_items = []
+                
+                for rule_result in rule_results:
+                    if isinstance(rule_result, dict):
+                        # 统计问题数量
+                        total_issues += len(rule_result.get("issues", []))
+                        
+                        # 统计风险等级
+                        risk_level = rule_result.get("risk_level", "medium")
+                        if risk_level == "high":
+                            high_risk_items += 1
+                        elif risk_level == "medium":
+                            medium_risk_items += 1
+                        elif risk_level == "low":
+                            low_risk_items += 1
+                        
+                        # 收集建议
+                        suggestions = rule_result.get("suggestions", [])
+                        action_items.extend(suggestions)
+                        
+                        # 收集关键建议
+                        if risk_level in ["high", "medium"]:
+                            critical_recommendations.extend(suggestions[:2])  # 只取前2个建议
+                
+                # 构建综合结果
+                combined_result = {
+                    "contract_name": "Contract Review",
+                    "overall_risk_level": "high" if high_risk_items > 0 else "medium" if medium_risk_items > 0 else "low",
+                    "total_issues": total_issues,
+                    "high_risk_items": high_risk_items,
+                    "medium_risk_items": medium_risk_items,
+                    "low_risk_items": low_risk_items,
+                    "overall_summary": f"基于 {len(review_rules)} 条规则的合同审查完成，发现 {total_issues} 个问题",
+                    "critical_recommendations": critical_recommendations[:5],  # 最多5个关键建议
+                    "action_items": action_items[:10],  # 最多10个行动项
+                    "confidence_score": 0.8,
+                    "rule_results": rule_results
+                }
+                
+                response_text = json.dumps(combined_result, ensure_ascii=False)
+                print(f"[DEBUG] 规则审查结果完成，总长度: {len(response_text)}", file=sys.stderr)
                 
             except Exception as e:
-                print(f"[ERROR] LLM call failed: {e}", file=sys.stderr)
-                raise Exception(f"LLM call failed: {e}")
+                print(f"[ERROR] 构建规则审查结果失败: {e}", file=sys.stderr)
+                response_text = "{}"
             
             # 解析结构化响应
             try:
-                structured_result = structured_review_service.parse_comprehensive_response(response_text)
+                # 直接解析合并后的JSON结果
+                structured_dict = json.loads(response_text)
                 
-                # 如果解析失败，使用备用响应
-                if not structured_result:
-                    print("[WARN] Parsing failed, using fallback response", file=sys.stderr)
-                    structured_result = structured_review_service.create_fallback_response(contract_content)
-                    
+                # 创建简化的结构化结果对象
+                structured_result = type('StructuredResult', (), {
+                    'contract_name': structured_dict.get("contract_name", "Contract Review"),
+                    'overall_risk_level': structured_dict.get("overall_risk_level", "medium"),
+                    'total_issues': structured_dict.get("total_issues", 0),
+                    'high_risk_items': structured_dict.get("high_risk_items", 0),
+                    'medium_risk_items': structured_dict.get("medium_risk_items", 0),
+                    'low_risk_items': structured_dict.get("low_risk_items", 0),
+                    'overall_summary': structured_dict.get("overall_summary", ""),
+                    'critical_recommendations': structured_dict.get("critical_recommendations", []),
+                    'action_items': structured_dict.get("action_items", []),
+                    'confidence_score': structured_dict.get("confidence_score", 0.8),
+                    'review_duration': 0.0,
+                    'model_used': 'rule_based_review',
+                    'dict': lambda self: structured_dict
+                })()
+                
             except Exception as e:
                 print(f"[ERROR] Failed to parse structured response: {e}", file=sys.stderr)
-                structured_result = structured_review_service.create_fallback_response(contract_content)
+                # 创建默认的结构化结果
+                structured_result = type('StructuredResult', (), {
+                    'contract_name': "Contract Review",
+                    'overall_risk_level': "medium",
+                    'total_issues': 0,
+                    'high_risk_items': 0,
+                    'medium_risk_items': 0,
+                    'low_risk_items': 0,
+                    'overall_summary': "规则审查解析失败",
+                    'critical_recommendations': ["请检查规则配置"],
+                    'action_items': ["重新提交审查请求"],
+                    'confidence_score': 0.5,
+                    'review_duration': 0.0,
+                    'model_used': 'rule_based_review',
+                    'dict': lambda self: {
+                        "contract_name": "Contract Review",
+                        "overall_risk_level": "medium",
+                        "total_issues": 0,
+                        "high_risk_items": 0,
+                        "medium_risk_items": 0,
+                        "low_risk_items": 0,
+                        "overall_summary": "规则审查解析失败",
+                        "critical_recommendations": ["请检查规则配置"],
+                        "action_items": ["重新提交审查请求"],
+                        "confidence_score": 0.5
+                    }
+                })()
             
             # 计算处理时间
             processing_time = time.time() - start_time
@@ -737,21 +1035,31 @@ async def chat_confirm(request: Request):
                     "total": structured_dict.get("total_issues", 0) or 0,
                     "failed_count": (structured_dict.get("high_risk_items", 0) or 0) + (structured_dict.get("medium_risk_items", 0) or 0),
                     "passed_count": structured_dict.get("low_risk_items", 0) or 0,
-                    # 注释掉四个审查类型
-                    # "subject_review": structured_dict.get("subject_review"),
-                    # "payment_review": structured_dict.get("payment_review"),
-                    # "breach_review": structured_dict.get("breach_review"),
-                    # "general_review": structured_dict.get("general_review"),
+                    "completed_tasks": len(rule_results),
+                    "total_tasks": len(review_rules),
+                    "review_stage": review_stage,
+                    "review_rules_count": len(review_rules) if review_rules else 0,
+                    # 包含规则审查结果
+                    "rule_results": rule_results if 'rule_results' in locals() else [],
                     "list": [
                         {
-                            "result": 0,  # 0=pass, 1=fail
-                            "riskLevel": 0,  # 0=low risk, 1=medium risk, 2=high risk
+                            "result": 1 if rule_result.get("review_result") in ["不通过", "FAIL"] else 0,  # 0=pass, 1=fail
+                            "riskLevel": 2 if rule_result.get("risk_level") == "high" else 1 if rule_result.get("risk_level") == "medium" else 0,  # 0=low risk, 1=medium risk, 2=high risk
                             "atrributable": 1,  # whether attributable
-                            "ruleName": "Contract Review Rule",
-                            "original_content": contract_content[:200] + "..." if len(contract_content) > 200 else contract_content,
-                            "modification_suggestion": structured_dict.get("critical_recommendations", [""])[0] if structured_dict.get("critical_recommendations") else "",
-                            "risk_description": structured_dict.get("overall_summary", "No risk description")
+                            "ruleName": rule_result.get("rule_name", "未命名规则"),
+                            "ruleId": rule_result.get("rule_id", 0),
+                            "ruleIndex": rule_result.get("rule_index", 0),
+                            "original_content": rule_result.get("matched_content", contract_content[:200] + "..." if len(contract_content) > 200 else contract_content),
+                            "modification_suggestion": rule_result.get("suggestions", [""])[0] if rule_result.get("suggestions") else "",
+                            "risk_description": rule_result.get("analysis", "无风险描述"),
+                            "confidence_score": rule_result.get("confidence_score", 0.5),
+                            # 新增分组信息
+                            "ruleGroupId": rule_id_to_rule.get(rule_result.get("rule_id", 0), {}).get("ruleGroupId"),
+                            "ruleGroupName": rule_id_to_rule.get(rule_result.get("rule_id", 0), {}).get("ruleGroupName"),
+                            # review_result 用枚举
+                            "review_result": "FAIL" if rule_result.get("review_result") in ["不通过", "FAIL"] else "PASS"
                         }
+                        for rule_result in (rule_results if 'rule_results' in locals() else [])
                     ]
                 }
             }
@@ -769,21 +1077,125 @@ async def chat_confirm(request: Request):
             }
             yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
             
-            # 发送保存提示事件
-            event_data = {
-                "event": "save_available",
-                "timestamp": time.time(),
-                "data": {
-                    "session_id": session_id,
-                    "message": "审查完成，可以保存结果到数据库",
-                    "save_endpoint": "/chat/save-review",
-                    "auto_save": auto_save,
-                    "user_id": user_id,
-                    "project_name": project_name,
-                    "structured_result": structured_dict
+            # 自动保存逻辑 - 只要有规则结果就自动保存
+            if rule_results:
+                log_debug(f"[DEBUG] 进入自动保存逻辑，rule_results长度={len(rule_results)}")
+                print(f"[DEBUG] 进入自动保存逻辑，rule_results长度={len(rule_results)}")
+                try:
+                    from .models import (
+                        create_confirm_review_session,
+                        bulk_create_confirm_review_rule_results
+                    )
+                    from .config import get_session
+                    
+                    # 获取数据库会话
+                    db = next(get_session())
+                    
+                    # 准备会话数据
+                    session_data = {
+                        'session_id': session_id,
+                        'user_id': user_id,
+                        'project_name': project_name,
+                        'review_stage': review_stage,
+                        'review_rules_count': len(review_rules) if review_rules else 0,
+                        'total_issues': structured_dict.get("total_issues", 0),
+                        'high_risk_items': structured_dict.get("high_risk_items", 0),
+                        'medium_risk_items': structured_dict.get("medium_risk_items", 0),
+                        'low_risk_items': structured_dict.get("low_risk_items", 0),
+                        'overall_risk_level': structured_dict.get("overall_risk_level", "medium"),
+                        'overall_summary': structured_dict.get("overall_summary", ""),
+                        'confidence_score': int(float(structured_dict.get("confidence_score", 0.8)) * 100),
+                        'critical_recommendations': structured_dict.get("critical_recommendations", []),
+                        'action_items': structured_dict.get("action_items", []),
+                        'processing_time': int(processing_time),
+                        'model_used': 'rule_based_review',
+                        'status': 'completed'
+                    }
+                    
+                    # 创建会话记录
+                    confirm_session = create_confirm_review_session(db, session_data)
+                    
+                    # 准备规则结果数据
+                    log_debug(f"[DEBUG] 开始准备规则结果数据，原始 rule_results 数量: {len(rule_results)}")
+                    rule_results_data = []
+                    for i, rule_result in enumerate(rule_results):
+                        log_debug(f"[DEBUG] 处理第 {i+1} 个规则结果: {rule_result}")
+                        try:
+                            confidence_score = float(rule_result.get('confidence_score', 0.5))
+                        except (ValueError, TypeError):
+                            confidence_score = 0.5
+                        result_data = {
+                            'session_id': session_id,
+                            'rule_id': rule_result.get('rule_id', 0),
+                            'rule_name': rule_result.get('rule_name', '未命名规则'),
+                            'rule_index': rule_result.get('rule_index', 0),
+                            'review_result': rule_result.get('review_result', '不通过'),
+                            'risk_level': rule_result.get('risk_level', 'medium'),
+                            'matched_content': rule_result.get('matched_content', ''),
+                            'analysis': rule_result.get('analysis', ''),
+                            'issues': rule_result.get('issues', []),
+                            'suggestions': rule_result.get('suggestions', []),
+                            'confidence_score': int(confidence_score * 100),
+                            # 新增 user_feedback 字段，优先取规则原始数据中的 user_feedback，否则为 None
+                            'user_feedback': rule_result.get('user_feedback', None)
+                        }
+                        log_debug(f"[DEBUG] 构建的 result_data: {result_data}")
+                        rule_results_data.append(result_data)
+                    log_debug(f"[DEBUG] 准备调用 bulk_create_confirm_review_rule_results，数据条数: {len(rule_results_data)}")
+                    # 批量创建规则结果记录
+                    if rule_results_data:
+                        try:
+                            created_results = bulk_create_confirm_review_rule_results(db, rule_results_data)
+                            log_debug(f"[DEBUG] bulk_create_confirm_review_rule_results 返回结果: {created_results}")
+                        except Exception as e:
+                            log_debug(f"[ERROR] bulk_create_confirm_review_rule_results 异常: {e}")
+                    else:
+                        log_debug(f"[DEBUG] rule_results_data 为空，跳过数据库写入")
+                    
+                    # 发送自动保存成功事件
+                    event_data = {
+                        "event": "auto_save_success",
+                        "timestamp": time.time(),
+                        "data": {
+                            "session_id": session_id,
+                            "message": "审查结果已自动保存到数据库",
+                            "saved_session_id": confirm_session.id,
+                            "saved_rule_results_count": len(rule_results_data),
+                            "user_id": user_id,
+                            "project_name": project_name
+                        }
+                    }
+                    yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                    
+                except Exception as e:
+                    print(f"[ERROR] 自动保存失败: {e}", file=sys.stderr)
+                    # 发送自动保存失败事件
+                    event_data = {
+                        "event": "auto_save_failed",
+                        "timestamp": time.time(),
+                        "data": {
+                            "session_id": session_id,
+                            "error": str(e),
+                            "message": "自动保存失败，请手动保存"
+                        }
+                    }
+                    yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            else:
+                # 发送保存提示事件
+                event_data = {
+                    "event": "save_available",
+                    "timestamp": time.time(),
+                    "data": {
+                        "session_id": session_id,
+                        "message": "审查完成，可以保存结果到数据库",
+                        "save_endpoint": "/chat/save-review",
+                        "auto_save": auto_save,
+                        "user_id": user_id,
+                        "project_name": project_name,
+                        "structured_result": structured_dict
+                    }
                 }
-            }
-            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
             
         except Exception as e:
             error_time = time.time()
@@ -805,8 +1217,24 @@ async def chat_confirm(request: Request):
             yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
     
     from starlette.responses import StreamingResponse
+    import asyncio
+    
+    # 将异步生成器转换为同步生成器
+    def sync_event_stream():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            async_gen = event_stream()
+            while True:
+                try:
+                    yield loop.run_until_complete(async_gen.__anext__())
+                except StopAsyncIteration:
+                    break
+        finally:
+            loop.close()
+    
     return StreamingResponse(
-        event_stream(),
+        sync_event_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -831,8 +1259,16 @@ async def structured_review(request: ChatRequest):
         # 创建结构化审查提示词
         structured_prompt = structured_review_service.create_comprehensive_prompt(contract_content)
         
-        # 调用大模型
-        response = chat_manager.ark_client.chat.completions.create(
+        # 使用异步方式调用大模型
+        from volcenginesdkarkruntime import AsyncArk
+        
+        # 创建异步Ark客户端
+        async_ark_client = AsyncArk(
+            api_key=chat_manager.ark_api_key,
+        )
+        
+        # 异步调用大模型
+        response = await async_ark_client.chat.completions.create(
             model=chat_manager.ark_model,
             messages=[
                 {"role": "system", "content": "You are a professional contract review assistant. Please strictly follow the required JSON format to output four types of review results."},
@@ -865,9 +1301,28 @@ async def structured_review(request: ChatRequest):
             "error_type": type(e).__name__
         }
 
+# 调试接口 - 测试 JSON body 解析
+@app.post("/debug/save-review")
+async def debug_save_review(request: Request):
+    """调试接口：直接打印收到的 JSON body"""
+    try:
+        data = await request.json()
+        print(f"[DEBUG] 收到的原始数据: {data}")
+        return {
+            "message": "调试成功",
+            "received_data": data,
+            "data_type": str(type(data))
+        }
+    except Exception as e:
+        print(f"[DEBUG] 解析 JSON 失败: {e}")
+        return {
+            "message": "解析失败",
+            "error": str(e)
+        }
+
 # 保存审查结果接口
 @app.post("/chat/save-review", response_model=SaveReviewResponse)
-async def save_review_result(request: SaveReviewRequest, db: Session = Depends(get_session)):
+async def save_review_result(request: Request, db: Session = Depends(get_session)):
     """
     保存审查结果到数据库
     
@@ -876,8 +1331,23 @@ async def save_review_result(request: SaveReviewRequest, db: Session = Depends(g
     try:
         from datetime import datetime
         
+        # 手动解析 JSON 数据
+        data = await request.json()
+        print(f"[DEBUG] 收到的数据: {data}")
+        
+        # 验证必需字段
+        session_id = data.get("session_id")
+        structured_result = data.get("structured_result", {})
+        user_id = data.get("user_id")
+        project_name = data.get("project_name")
+        reviewer = data.get("reviewer", "AI助手")
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="session_id 是必需的")
+        if not structured_result:
+            raise HTTPException(status_code=400, detail="structured_result 是必需的")
+        
         # 从结构化结果中提取关键信息
-        structured_result = request.structured_result
         total_issues = structured_result.get("total_issues", 0)
         overall_risk_level = structured_result.get("overall_risk_level", "无")
         overall_summary = structured_result.get("overall_summary", "")
@@ -896,15 +1366,15 @@ async def save_review_result(request: SaveReviewRequest, db: Session = Depends(g
         
         # 构建保存数据
         review_data = {
-            "project_name": request.project_name or f"合同审查 - {request.session_id}",
+            "project_name": project_name or f"合同审查 - {session_id}",
             "risk_level": risk_level,
             "review_status": review_status,
-            "reviewer": request.reviewer,
+            "reviewer": reviewer,
             "review_comment": overall_summary,
             "ext_json": {
                 "structured_result": structured_result,
-                "session_id": request.session_id,
-                "user_id": request.user_id,
+                "session_id": session_id,
+                "user_id": user_id,
                 "review_timestamp": datetime.now().isoformat(),
                 "total_issues": total_issues,
                 "high_risk_items": structured_result.get("high_risk_items", 0),
@@ -920,7 +1390,7 @@ async def save_review_result(request: SaveReviewRequest, db: Session = Depends(g
         return SaveReviewResponse(
             message="审查结果已成功保存",
             review_id=saved_review.id,
-            session_id=request.session_id,
+            session_id=session_id,
             saved_at=datetime.now().isoformat()
         )
         
@@ -1065,10 +1535,85 @@ async def delete_saved_review(review_id: int, db: Session = Depends(get_session)
 
 # 包含外部路由（如果可用）
 if external_router is not None:
-    app.include_router(external_router)
-    print("✅ 外部路由已加载")
+    app.include_router(external_router, prefix="/api")
+    print("✅ 外部路由已加载，前缀: /api")
 else:
     print("⚠️  外部路由未加载（直接运行模式或导入失败）")
+
+# 最小化测试路由 - 绕过Pydantic模型解析
+@app.post("/test/save-review")
+async def test_save_review(request: Request, db: Session = Depends(get_session)):
+    """
+    最小化测试路由 - 手动解析JSON并直接写入数据库
+    绕过Pydantic模型解析以避免参数冲突
+    """
+    try:
+        import json
+        from datetime import datetime
+        
+        # 手动解析JSON
+        body = await request.body()
+        data = json.loads(body.decode('utf-8'))
+        
+        print(f"[DEBUG] 接收到的原始数据: {data}")
+        
+        # 提取必要字段
+        session_id = data.get("session_id")
+        structured_result = data.get("structured_result", {})
+        user_id = data.get("user_id", "test_user")
+        project_name = data.get("project_name", f"测试审查 - {session_id}")
+        reviewer = data.get("reviewer", "测试助手")
+        
+        if not session_id:
+            return {"error": "缺少session_id字段"}
+        
+        # 计算基本信息
+        total_issues = structured_result.get("total_issues", 0)
+        overall_risk_level = structured_result.get("overall_risk_level", "无")
+        overall_summary = structured_result.get("overall_summary", "测试审查摘要")
+        
+        # 确定审查状态和风险等级
+        review_status = "通过" if total_issues == 0 else "不通过"
+        risk_level_map = {
+            "high": "高", "medium": "中", "low": "低", "none": "无"
+        }
+        risk_level = risk_level_map.get(overall_risk_level, "无")
+        
+        # 构建保存数据
+        review_data = {
+            "project_name": project_name,
+            "risk_level": risk_level,
+            "review_status": review_status,
+            "reviewer": reviewer,
+            "review_comment": overall_summary,
+            "ext_json": {
+                "structured_result": structured_result,
+                "session_id": session_id,
+                "user_id": user_id,
+                "review_timestamp": datetime.now().isoformat(),
+                "total_issues": total_issues,
+                "high_risk_items": structured_result.get("high_risk_items", 0),
+                "medium_risk_items": structured_result.get("medium_risk_items", 0),
+                "low_risk_items": structured_result.get("low_risk_items", 0),
+                "confidence_score": structured_result.get("confidence_score", 0.0)
+            }
+        }
+        
+        # 保存到数据库
+        saved_review = create_contract_audit_review(db, review_data)
+        
+        return {
+            "message": "测试路由：审查结果已成功保存",
+            "review_id": saved_review.id,
+            "session_id": session_id,
+            "saved_at": datetime.now().isoformat(),
+            "test_route": True
+        }
+        
+    except json.JSONDecodeError as e:
+        return {"error": f"JSON解析失败: {str(e)}"}
+    except Exception as e:
+        return {"error": f"保存失败: {str(e)}"}
 
 if __name__ == "__main__":
     import uvicorn

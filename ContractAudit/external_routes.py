@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, BackgroundTasks, Body
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -12,7 +12,11 @@ from .models import (
     ReviewRule,
     bulk_create_review_rules,
     get_review_rule_by_external_id,
-    list_review_rules
+    list_review_rules,
+    ConfirmReviewRuleResult,
+    create_confirm_review_rule_result,
+    bulk_create_confirm_review_rule_results,
+    get_confirm_review_rule_results
 )
 from .config import get_session
 import requests
@@ -671,70 +675,350 @@ async def save_selected_review_rules(
 @router.post("/review-rules/save-selected-sync", response_model=SaveSelectedRulesResponse)
 async def save_selected_review_rules_sync(request: SaveSelectedRulesRequest, db: Session = Depends(get_session)):
     """
-    同步保存用户勾选的审查规则到数据库（立即执行，不使用后台任务）
+    同步保存选中的审查规则到数据库
     """
     try:
-        # 转换数据格式
-        rules_data = []
-        saved_count = 0
-        skipped_count = 0
+        # 获取或创建规则组
+        rule_group_name = request.description or "默认规则组"
         
-        for rule in request.selected_rules:
-            # 检查是否已存在（根据外部ID）
-            existing_rule = get_review_rule_by_external_id(db, rule.rule_id)
+        # 批量创建规则
+        created_rules = []
+        for rule_dto in request.selected_rules:
+            rule_data = {
+                'id': rule_dto.rule_id,  # 使用外部ID
+                'rule_name': rule_dto.rule_name,
+                'type': rule_dto.type,
+                'risk_level': rule_dto.risk_level,
+                'risk_attribution_id': rule_dto.risk_attribution_id,
+                'risk_attribution_name': rule_dto.risk_attribution_name,
+                'censored_search_engine': rule_dto.censored_search_engine,
+                'rule_group_id': rule_dto.rule_group_id,
+                'rule_group_name': rule_dto.rule_group_name or rule_group_name,
+                'include_rule': rule_dto.include_rule,
+                'logic_rule_list': rule_dto.logic_rule_list,
+                'example_list': rule_dto.example_list,
+                'conditional_identifier': rule_dto.conditional_identifier,
+                'condition_list': rule_dto.condition_list,
+                'revise_opinion': rule_dto.revise_opinion,
+                'creator_id': rule_dto.creator_id,
+                'creator_name': rule_dto.creator_name,
+                'version': rule_dto.version,
+                'update_time': rule_dto.update_time
+            }
+            
+            # 检查是否已存在
+            existing_rule = get_review_rule_by_external_id(db, rule_dto.rule_id)
             if existing_rule:
-                print(f"规则已存在，跳过: {rule.rule_name}")
-                skipped_count += 1
+                print(f"规则已存在，跳过: {rule_dto.rule_name}")
                 continue
                 
-            rule_data = {
-                'id': rule.rule_id,  # 使用外部ID作为本地ID
-                'rule_name': rule.rule_name,
-                'type': rule.type,
-                'risk_level': rule.risk_level,
-                'risk_attribution_id': rule.risk_attribution_id,
-                'risk_attribution_name': rule.risk_attribution_name,
-                'censored_search_engine': rule.censored_search_engine,
-                'rule_group_id': rule.rule_group_id,
-                'rule_group_name': rule.rule_group_name,
-                'include_rule': rule.include_rule,
-                'logic_rule_list': rule.logic_rule_list,
-                'example_list': rule.example_list,
-                'conditional_identifier': rule.conditional_identifier,
-                'condition_list': rule.condition_list,
-                'revise_opinion': rule.revise_opinion,
-                'creator_id': rule.creator_id,
-                'creator_name': rule.creator_name,
-                'version': rule.version,
-                'update_time': rule.update_time
-            }
-            rules_data.append(rule_data)
-        
-        if rules_data:
-            # 批量插入数据
-            created_rules = bulk_create_review_rules(db, rules_data)
-            saved_count = len(created_rules)
-            print(f"成功保存 {saved_count} 条勾选的审查规则到数据库")
+            created_rule = bulk_create_review_rules(db, [rule_data])
+            if created_rule:
+                created_rules.extend(created_rule)
         
         return SaveSelectedRulesResponse(
             code=200,
-            message=f"成功保存 {saved_count} 条勾选的审查规则，跳过 {skipped_count} 条已存在的规则",
+            message=f"成功保存 {len(created_rules)} 条审查规则",
             data={
-                "selected_count": len(request.selected_rules),
-                "saved_count": saved_count,
-                "skipped_count": skipped_count,
+                "saved_count": len(created_rules),
+                "rule_ids": [rule.id for rule in created_rules],
                 "user_id": request.user_id,
-                "project_name": request.project_name,
-                "description": request.description
+                "project_name": request.project_name
             }
         )
         
     except Exception as e:
-        print(f"同步保存勾选审查规则异常: {e}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"同步保存勾选审查规则失败: {str(e)}"
+        print(f"保存审查规则失败: {e}")
+        return SaveSelectedRulesResponse(
+            code=500,
+            message=f"保存失败: {str(e)}",
+            data=None
         )
+
+# 新增：Confirm接口审查结果相关API
+
+class ConfirmReviewSessionOut(BaseModel):
+    """Confirm审查会话输出模型"""
+    id: int
+    session_id: str
+    user_id: Optional[str] = None
+    project_name: Optional[str] = None
+    review_stage: Optional[str] = None
+    review_rules_count: int
+    total_issues: int
+    high_risk_items: int
+    medium_risk_items: int
+    low_risk_items: int
+    overall_risk_level: str
+    overall_summary: Optional[str] = None
+    confidence_score: int
+    critical_recommendations: Optional[list] = None
+    action_items: Optional[list] = None
+    processing_time: int
+    model_used: str
+    status: str
+    error_message: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+    class Config:
+        orm_mode = True
+
+class ConfirmReviewRuleResultOut(BaseModel):
+    """Confirm规则审查结果输出模型"""
+    id: int
+    session_id: str
+    rule_id: int
+    rule_name: str
+    rule_index: int
+    review_result: str
+    risk_level: str
+    matched_content: Optional[str] = None
+    analysis: Optional[str] = None
+    issues: Optional[list] = None
+    suggestions: Optional[list] = None
+    confidence_score: int
+    user_feedback: Optional[int] = None  # 0=点踩, 1=点赞, null=无反馈
+    created_at: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+        
+    @classmethod
+    def from_orm(cls, obj):
+        """自定义序列化方法"""
+        data = {
+            'id': obj.id,
+            'session_id': obj.session_id,
+            'rule_id': obj.rule_id,
+            'rule_name': obj.rule_name,
+            'rule_index': obj.rule_index,
+            'review_result': obj.review_result,
+            'risk_level': obj.risk_level,
+            'matched_content': obj.matched_content,
+            'analysis': obj.analysis,
+            'issues': obj.issues,
+            'suggestions': obj.suggestions,
+            'confidence_score': obj.confidence_score,
+            'user_feedback': obj.user_feedback,
+            'created_at': obj.created_at.isoformat() if obj.created_at else None
+        }
+        return cls(**data)
+
+class ConfirmReviewRuleResultIn(BaseModel):
+    """Confirm规则审查结果输入模型（创建时使用）"""
+    session_id: str
+    rule_id: int
+    rule_name: str
+    rule_index: int
+    review_result: str
+    risk_level: str
+    matched_content: Optional[str] = None
+    analysis: Optional[str] = None
+    issues: Optional[list] = None
+    suggestions: Optional[list] = None
+    confidence_score: int = 50
+    user_feedback: Optional[int] = None  # 0=点踩, 1=点赞, null=无反馈
+
+class ConfirmReviewDetailOut(BaseModel):
+    """Confirm审查详情输出模型"""
+    session: ConfirmReviewSessionOut
+    rule_results: List[ConfirmReviewRuleResultOut]
+
+@router.get("/confirm-reviews", response_model=List[ConfirmReviewSessionOut])
+def get_confirm_review_sessions(
+    user_id: Optional[str] = Query(None, description="用户ID"),
+    skip: int = Query(0, ge=0, description="跳过记录数"),
+    limit: int = Query(100, ge=1, le=1000, description="返回记录数"),
+    db: Session = Depends(get_session)
+):
+    """
+    获取Confirm审查会话列表
+    """
+    from .models import list_confirm_review_sessions
+    sessions = list_confirm_review_sessions(db, user_id=user_id, skip=skip, limit=limit)
+    return sessions
+
+@router.get("/confirm-reviews/{session_id}", response_model=ConfirmReviewDetailOut)
+def get_confirm_review_detail(session_id: str, db: Session = Depends(get_session)):
+    """
+    获取指定会话的Confirm审查详情
+    """
+    from .models import get_confirm_review_session, get_confirm_review_rule_results
+    
+    session = get_confirm_review_session(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="审查会话不存在")
+    
+    rule_results = get_confirm_review_rule_results(db, session_id)
+    
+    return ConfirmReviewDetailOut(session=session, rule_results=rule_results)
+
+@router.get("/confirm-reviews/statistics")
+def get_confirm_review_statistics(
+    user_id: Optional[str] = Query(None, description="用户ID"),
+    db: Session = Depends(get_session)
+):
+    """
+    获取Confirm审查统计信息
+    """
+    from .models import get_confirm_review_statistics
+    stats = get_confirm_review_statistics(db, user_id=user_id)
+    return {
+        "code": 200,
+        "message": "获取统计信息成功",
+        "data": stats
+    }
+
+@router.delete("/confirm-reviews/{session_id}")
+def delete_confirm_review_session(session_id: str, db: Session = Depends(get_session)):
+    """
+    删除Confirm审查会话（软删除）
+    """
+    from .models import get_confirm_review_session, ConfirmReviewRuleResult
+    
+    session = get_confirm_review_session(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="审查会话不存在")
+    
+    # 软删除会话
+    session.status = "deleted"
+    db.commit()
+    
+    # 删除相关的规则结果
+    rule_results = db.query(ConfirmReviewRuleResult).filter(
+        ConfirmReviewRuleResult.session_id == session_id
+    ).all()
+    
+    for result in rule_results:
+        db.delete(result)
+    
+    db.commit()
+    
+    return {
+        "code": 200,
+        "message": "删除成功",
+        "data": {
+            "deleted_session_id": session_id,
+            "deleted_rule_results_count": len(rule_results)
+        }
+    }
+
+# Create
+@router.post("/confirm-review-rule-result", response_model=ConfirmReviewRuleResultOut)
+def create_confirm_rule_result(result: ConfirmReviewRuleResultIn, db: Session = Depends(get_session)):
+    result_data = result.dict(exclude_unset=True)
+    created = create_confirm_review_rule_result(db, result_data)
+    return created
+
+# Read by id
+@router.get("/confirm-review-rule-result/{id}", response_model=ConfirmReviewRuleResultOut)
+def get_confirm_rule_result(id: int, db: Session = Depends(get_session)):
+    obj = db.query(ConfirmReviewRuleResult).filter(ConfirmReviewRuleResult.id == id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="规则结果不存在")
+    return ConfirmReviewRuleResultOut.from_orm(obj)
+
+# Update by id
+@router.put("/confirm-review-rule-result/{id}", response_model=ConfirmReviewRuleResultOut)
+def update_confirm_rule_result(id: int, result: ConfirmReviewRuleResultOut, db: Session = Depends(get_session)):
+    obj = db.query(ConfirmReviewRuleResult).filter(ConfirmReviewRuleResult.id == id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="规则结果不存在")
+    for k, v in result.dict(exclude_unset=True).items():
+        setattr(obj, k, v)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+# Delete by id
+@router.delete("/confirm-review-rule-result/{id}")
+def delete_confirm_rule_result(id: int, db: Session = Depends(get_session)):
+    obj = db.query(ConfirmReviewRuleResult).filter(ConfirmReviewRuleResult.id == id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="规则结果不存在")
+    db.delete(obj)
+    db.commit()
+    return {"code": 200, "message": "删除成功", "id": id}
+
+# 用户反馈接口
+class UserFeedbackRequest(BaseModel):
+    rule_id: int = Field(..., description="规则ID")
+    feedback: int = Field(..., description="用户反馈: 0=点踩, 1=点赞")
+
+@router.post("/confirm-review-rule-result/feedback")
+def update_user_feedback_by_rule_id(request: UserFeedbackRequest = Body(...), db: Session = Depends(get_session)):
+    """
+    用 rule_id 点赞/点踩（前端只需传 rule_id 和 feedback）
+    """
+    rule_id = getattr(request, 'rule_id', None)
+    feedback = getattr(request, 'feedback', None)
+    if rule_id is None or feedback not in [0, 1]:
+        raise HTTPException(status_code=400, detail="必须提供 rule_id 和 feedback(0或1)")
+    obj = db.query(ConfirmReviewRuleResult).filter(ConfirmReviewRuleResult.rule_id == rule_id).order_by(ConfirmReviewRuleResult.id.desc()).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="规则结果不存在")
+    obj.user_feedback = feedback
+    db.commit()
+    db.refresh(obj)
+    feedback_text = "点赞" if feedback == 1 else "点踩"
+    return {
+        "code": 200,
+        "message": f"{feedback_text}成功",
+        "user_feedback": obj.user_feedback,
+        "rule_id": rule_id,
+        "id": obj.id
+    }
+
+# 分页查询接口
+@router.get("/confirm-review-rule-results", response_model=List[ConfirmReviewRuleResultOut])
+def list_confirm_rule_results(
+    session_id: Optional[str] = Query(None),
+    rule_id: Optional[int] = Query(None),
+    rule_name: Optional[str] = Query(None),
+    review_result: Optional[str] = Query(None),
+    skip: int = 0,
+    limit: int = 20,
+    db: Session = Depends(get_session)
+):
+    query = db.query(ConfirmReviewRuleResult)
+    if session_id:
+        query = query.filter(ConfirmReviewRuleResult.session_id == session_id)
+    if rule_id:
+        query = query.filter(ConfirmReviewRuleResult.rule_id == rule_id)
+    if rule_name:
+        query = query.filter(ConfirmReviewRuleResult.rule_name.like(f"%{rule_name}%"))
+    if review_result:
+        query = query.filter(ConfirmReviewRuleResult.review_result == review_result)
+    results = query.order_by(ConfirmReviewRuleResult.id.desc()).offset(skip).limit(limit).all()
+    return [ConfirmReviewRuleResultOut.from_orm(obj) for obj in results]
+
+class PaginatedConfirmReviewRuleResult(BaseModel):
+    total: int
+    items: List['ConfirmReviewRuleResultOut']
+
+@router.get("/confirm-review-rule-result/page", response_model=PaginatedConfirmReviewRuleResult)
+def paginated_confirm_review_rule_results(
+    rule_id: Optional[int] = Query(None),
+    session_id: Optional[str] = Query(None),
+    review_result: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0, description="跳过记录数"),
+    limit: int = Query(20, ge=1, le=100, description="每页数量"),
+    db: Session = Depends(get_session)
+):
+    query = db.query(ConfirmReviewRuleResult)
+    if rule_id:
+        query = query.filter(ConfirmReviewRuleResult.rule_id == rule_id)
+    if session_id:
+        query = query.filter(ConfirmReviewRuleResult.session_id == session_id)
+    if review_result:
+        query = query.filter(ConfirmReviewRuleResult.review_result == review_result)
+    total = query.count()
+    results = query.order_by(ConfirmReviewRuleResult.id.desc()).offset(skip).limit(limit).all()
+    return PaginatedConfirmReviewRuleResult(
+        total=total,
+        items=[ConfirmReviewRuleResultOut.from_orm(obj) for obj in results]
+    )
 
 if __name__ == "__main__":
     import sys, os
