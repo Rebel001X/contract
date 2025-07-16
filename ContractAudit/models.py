@@ -230,6 +230,7 @@ class ConfirmReviewRuleResult(Base):
     feedback_suggestion = Column(Text, nullable=True, comment='反馈建议内容')
     is_approved = Column(Boolean, nullable=True, comment='审核是否通过标志')
     contract_id = Column(String(255), nullable=True, comment='合同ID')
+    contract_name = Column(String(500), nullable=True, comment='合同名称')
     
     # 时间戳
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, comment='创建时间')

@@ -5,6 +5,7 @@ ContractAudit模块主入口文件
 
 import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from contextlib import asynccontextmanager
 import os
 LOG_PATH = os.path.join(os.path.dirname(__file__), 'confirm_debug.log')
@@ -42,8 +43,8 @@ import uuid
 
 # 导入数据库相关模块
 try:
-    from .config import get_session
-    from .models import ContractAuditReview, create_contract_audit_review
+    from ContractAudit.config import get_session
+    from ContractAudit.models import ContractAuditReview, create_contract_audit_review
 except ImportError:
     # 直接运行时使用绝对导入
     from config import get_session
@@ -55,16 +56,11 @@ except ImportError:
 
 # 尝试导入外部路由
 try:
-    if __name__ == "__main__":
-        # 直接运行时，也导入external_routes
-        from external_routes import router as external_router
-        print("成功导入external_routes（直接运行模式）")
-    else:
-        from .external_routes import router as external_router
-        print("成功导入external_routes（模块模式）")
-except ImportError as e:
-    print(f"无法导入external_routes: {e}")
-    external_router = None
+    from ContractAudit.external_routes import router as external_router
+    print("成功导入external_routes（包内相对导入）")
+except ImportError:
+    from external_routes import router as external_router
+    print("成功导入external_routes（绝对导入）")
 
 try:
     # 只导入完整版聊天管理器
@@ -224,11 +220,8 @@ app.add_middleware(
 )
 
 # 包含外部路由
-if external_router:
-    app.include_router(external_router, prefix="/api", tags=["external"])
-    print("✅ 已包含外部路由 (external_routes)")
-else:
-    print("⚠️  外部路由未包含")
+app.include_router(external_router, prefix="/api", tags=["external"])
+print("✅ 已包含外部路由 (external_routes)")
 
 # Pydantic模型
 class CreateSessionRequest(BaseModel):
@@ -1084,11 +1077,11 @@ async def chat_confirm(request: Request):
                 log_debug(f"[DEBUG] 进入自动保存逻辑，rule_results长度={len(rule_results)}")
                 print(f"[DEBUG] 进入自动保存逻辑，rule_results长度={len(rule_results)}")
                 try:
-                    from .models import (
+                    from ContractAudit.models import (
                         create_confirm_review_session,
                         bulk_create_confirm_review_rule_results
                     )
-                    from .config import get_session
+                    from ContractAudit.config import get_session
                     
                     # 获取数据库会话
                     db = next(get_session())
@@ -1139,7 +1132,8 @@ async def chat_confirm(request: Request):
                             'suggestions': rule_result.get('suggestions', []),
                             'confidence_score': int(confidence_score * 100),
                             'user_feedback': rule_result.get('user_feedback', None),
-                            'contract_id': contract_id  # 新增：存合同ID
+                            'contract_id': contract_id,  # 新增：存合同ID
+                            'contract_name': project_name,  # 新增：存合同名称
                         }
                         log_debug(f"[DEBUG] 构建的 result_data: {result_data}")
                         rule_results_data.append(result_data)
@@ -1509,7 +1503,7 @@ async def delete_saved_review(review_id: int, db: Session = Depends(get_session)
     删除指定的审查记录（软删除）
     """
     try:
-        from .models import delete_contract_audit_review
+        from ContractAudit.models import delete_contract_audit_review
         
         success = delete_contract_audit_review(db, review_id)
         

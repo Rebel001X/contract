@@ -24,6 +24,21 @@ import os
 from fastapi.responses import StreamingResponse
 import asyncio
 import threading
+import sys
+import os
+from sqlalchemy import func
+from datetime import datetime
+
+# Robust import for unified_response
+try:
+    from .utils import unified_response
+except ImportError:
+    try:
+        from ContractAudit.utils import unified_response
+    except ImportError:
+        # Fallback: add parent dir to sys.path and try again
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from utils import unified_response
 
 router = APIRouter()
 
@@ -149,22 +164,27 @@ class BaseResponse(BaseModel):
     data: Optional[dict] = None
 
 # CRUD 路由
+@unified_response
 @router.post("/contract-audit-reviews", response_model=ContractAuditReviewOut)
 def create_review(review: ContractAuditReviewCreate, db: Session = Depends(get_session)):
     obj = create_contract_audit_review(db, review.dict())
     return obj
 
+@unified_response
 @router.get("/contract-audit-reviews/{review_id}", response_model=ContractAuditReviewOut)
 def get_review(review_id: int, db: Session = Depends(get_session)):
     obj = get_contract_audit_review(db, review_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Review not found")
-    return obj
+    return {"code": 0, "data": obj, "maxPage": 1, "message": ""}
 
-@router.get("/contract-audit-reviews", response_model=List[ContractAuditReviewOut])
+@unified_response
+@router.get("/contract-audit-reviews")
 def list_reviews(skip: int = 0, limit: int = 100, db: Session = Depends(get_session)):
-    return list_contract_audit_reviews(db, skip=skip, limit=limit)
+    data = list_contract_audit_reviews(db, skip=skip, limit=limit)
+    return {"code": 0, "data": data, "maxPage": 1, "message": ""}
 
+@unified_response
 @router.put("/contract-audit-reviews/{review_id}", response_model=ContractAuditReviewOut)
 def update_review(review_id: int, review: ContractAuditReviewUpdate, db: Session = Depends(get_session)):
     obj = update_contract_audit_review(db, review_id, review.dict(exclude_unset=True))
@@ -172,6 +192,7 @@ def update_review(review_id: int, review: ContractAuditReviewUpdate, db: Session
         raise HTTPException(status_code=404, detail="Review not found")
     return obj
 
+@unified_response
 @router.delete("/contract-audit-reviews/{review_id}")
 def delete_review(review_id: int, db: Session = Depends(get_session)):
     success = delete_contract_audit_review(db, review_id)
@@ -200,6 +221,7 @@ async def upload_local_docx():
         print("外部服务调用异常:", e)
         raise HTTPException(status_code=500, detail=f"外部服务调用失败: {str(e)}")
 
+@unified_response
 @router.get("/contract-audit-reviews/page", response_model=PaginatedContractAuditReview)
 def paginated_reviews(
     page: int = Query(1, ge=1, description="页码，从1开始"),
@@ -222,8 +244,10 @@ def paginated_reviews(
     
     total = query.count()
     items = query.order_by(ContractAuditReview.updated_at.desc()).offset(skip).limit(page_size).all()
-    return PaginatedContractAuditReview(total=total, items=items)
+    max_page = (total + page_size - 1) // page_size if page_size else 1
+    return {"code": 0, "data": {"total": total, "items": items}, "maxPage": max_page, "message": ""}
 
+@unified_response
 @router.get("/contract-audit-reviews/by-session/{session_id}", response_model=List[ContractAuditReviewOut])
 def get_reviews_by_session(session_id: str, db: Session = Depends(get_session)):
     """
@@ -234,8 +258,9 @@ def get_reviews_by_session(session_id: str, db: Session = Depends(get_session)):
         ContractAuditReview.is_deleted == False
     ).order_by(ContractAuditReview.created_at.desc()).all()
     
-    return reviews
+    return {"code": 0, "data": reviews, "maxPage": 1, "message": ""}
 
+@unified_response
 @router.get("/contract-audit-reviews/stats")
 def get_review_stats(
     session_id: Optional[str] = Query(None, description="会话ID"),
@@ -269,7 +294,7 @@ def get_review_stats(
     passed_count = query.filter(ContractAuditReview.review_status == "通过").count()
     failed_count = query.filter(ContractAuditReview.review_status == "不通过").count()
     
-    return {
+    return {"code": 0, "data": {
         "total_count": total_count,
         "risk_level_stats": {item.risk_level: item.count for item in risk_stats},
         "review_status_stats": {item.review_status: item.count for item in status_stats},
@@ -280,7 +305,7 @@ def get_review_stats(
             "passed_count": passed_count,
             "failed_count": failed_count
         }
-    }
+    }, "maxPage": 1, "message": ""}
 
 @router.get("/hetong-docx")
 async def get_hetong_docx():
@@ -411,6 +436,7 @@ async def external_rag_stream(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"代理调用失败: {str(e)}")
 
+@unified_response
 @router.post("/external/review-rules", response_model=BaseResponse)
 async def get_review_rule_list(query_dto: QueryReviewRuleDto, background_tasks: BackgroundTasks):
     """
@@ -465,6 +491,7 @@ async def get_review_rule_list(query_dto: QueryReviewRuleDto, background_tasks: 
         print(f"获取审查规则列表异常: {e}")
         raise HTTPException(status_code=500, detail=f"获取审查规则列表失败: {str(e)}")
 
+@unified_response
 @router.post("/external/review-rules/sync", response_model=BaseResponse)
 async def sync_review_rules_to_db(background_tasks: BackgroundTasks):
     """
@@ -520,6 +547,7 @@ async def sync_review_rules_to_db(background_tasks: BackgroundTasks):
         print(f"同步审查规则异常: {e}")
         raise HTTPException(status_code=500, detail=f"同步审查规则失败: {str(e)}")
 
+@unified_response
 @router.get("/review-rules", response_model=List[dict])
 def get_saved_review_rules(
     skip: int = Query(0, ge=0, description="跳过记录数"),
@@ -559,6 +587,7 @@ def get_saved_review_rules(
         print(f"获取保存的审查规则异常: {e}")
         raise HTTPException(status_code=500, detail=f"获取审查规则失败: {str(e)}")
 
+@unified_response
 @router.get("/review-rules/count")
 def get_review_rules_count(db: Session = Depends(get_session)):
     """
@@ -608,6 +637,7 @@ class SaveSelectedRulesResponse(BaseModel):
     message: str
     data: Optional[dict] = None
 
+@unified_response
 @router.post("/review-rules/save-selected", response_model=SaveSelectedRulesResponse)
 async def save_selected_review_rules(
     request: SaveSelectedRulesRequest, 
@@ -672,6 +702,7 @@ async def save_selected_review_rules(
             detail=f"保存勾选审查规则失败: {str(e)}"
         )
 
+@unified_response
 @router.post("/review-rules/save-selected-sync", response_model=SaveSelectedRulesResponse)
 async def save_selected_review_rules_sync(request: SaveSelectedRulesRequest, db: Session = Depends(get_session)):
     """
@@ -782,7 +813,7 @@ class ConfirmReviewRuleResultOut(BaseModel):
     feedback_suggestion: Optional[str] = None  # 反馈建议内容
     is_approved: Optional[bool] = None  # 审核是否通过标志
     contract_id: Optional[str] = None  # 合同ID
-    created_at: Optional[str] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         orm_mode = True
@@ -828,12 +859,14 @@ class ConfirmReviewRuleResultIn(BaseModel):
     feedback_suggestion: Optional[str] = None  # 反馈建议内容
     is_approved: Optional[bool] = None  # 审核是否通过标志
     contract_id: Optional[str] = None  # 合同ID
+    contract_name: Optional[str] = None  # 合同名称
 
 class ConfirmReviewDetailOut(BaseModel):
     """Confirm审查详情输出模型"""
     session: ConfirmReviewSessionOut
     rule_results: List[ConfirmReviewRuleResultOut]
 
+@unified_response
 @router.get("/confirm-reviews", response_model=List[ConfirmReviewSessionOut])
 def get_confirm_review_sessions(
     user_id: Optional[str] = Query(None, description="用户ID"),
@@ -848,6 +881,7 @@ def get_confirm_review_sessions(
     sessions = list_confirm_review_sessions(db, user_id=user_id, skip=skip, limit=limit)
     return sessions
 
+@unified_response
 @router.get("/confirm-reviews/{session_id}", response_model=ConfirmReviewDetailOut)
 def get_confirm_review_detail(session_id: str, db: Session = Depends(get_session)):
     """
@@ -863,6 +897,7 @@ def get_confirm_review_detail(session_id: str, db: Session = Depends(get_session
     
     return ConfirmReviewDetailOut(session=session, rule_results=rule_results)
 
+@unified_response
 @router.get("/confirm-reviews/statistics")
 def get_confirm_review_statistics(
     user_id: Optional[str] = Query(None, description="用户ID"),
@@ -879,6 +914,7 @@ def get_confirm_review_statistics(
         "data": stats
     }
 
+@unified_response
 @router.delete("/confirm-reviews/{session_id}")
 def delete_confirm_review_session(session_id: str, db: Session = Depends(get_session)):
     """
@@ -914,13 +950,18 @@ def delete_confirm_review_session(session_id: str, db: Session = Depends(get_ses
     }
 
 # Create
+@unified_response
 @router.post("/confirm-review-rule-result", response_model=ConfirmReviewRuleResultOut)
 def create_confirm_rule_result(result: ConfirmReviewRuleResultIn, db: Session = Depends(get_session)):
     result_data = result.dict(exclude_unset=True)
+    # 确保contract_name写入
+    if 'contract_name' not in result_data:
+        result_data['contract_name'] = None
     created = create_confirm_review_rule_result(db, result_data)
     return created
 
 # Read by id
+@unified_response
 @router.get("/confirm-review-rule-result/{id}", response_model=ConfirmReviewRuleResultOut)
 def get_confirm_rule_result(id: int, db: Session = Depends(get_session)):
     obj = db.query(ConfirmReviewRuleResult).filter(ConfirmReviewRuleResult.id == id).first()
@@ -929,6 +970,7 @@ def get_confirm_rule_result(id: int, db: Session = Depends(get_session)):
     return ConfirmReviewRuleResultOut.from_orm(obj)
 
 # Update by id
+@unified_response
 @router.put("/confirm-review-rule-result/{id}", response_model=ConfirmReviewRuleResultOut)
 def update_confirm_rule_result(id: int, result: ConfirmReviewRuleResultOut, db: Session = Depends(get_session)):
     obj = db.query(ConfirmReviewRuleResult).filter(ConfirmReviewRuleResult.id == id).first()
@@ -941,6 +983,7 @@ def update_confirm_rule_result(id: int, result: ConfirmReviewRuleResultOut, db: 
     return obj
 
 # Delete by id
+@unified_response
 @router.delete("/confirm-review-rule-result/{id}")
 def delete_confirm_rule_result(id: int, db: Session = Depends(get_session)):
     obj = db.query(ConfirmReviewRuleResult).filter(ConfirmReviewRuleResult.id == id).first()
@@ -958,6 +1001,7 @@ class UserFeedbackRequest(BaseModel):
     is_approved: Optional[bool] = Field(None, description="审核是否通过标志")
     contract_id: Optional[str] = Field(None, description="合同ID")
 
+@unified_response
 @router.post("/confirm-review-rule-result/feedback")
 def update_user_feedback_by_rule_id(request: UserFeedbackRequest = Body(...), db: Session = Depends(get_session)):
     """
@@ -1001,6 +1045,7 @@ def update_user_feedback_by_rule_id(request: UserFeedbackRequest = Body(...), db
     }
 
 # 分页查询接口
+@unified_response
 @router.get("/confirm-review-rule-results", response_model=List[ConfirmReviewRuleResultOut])
 def list_confirm_rule_results(
     session_id: Optional[str] = Query(None),
@@ -1027,15 +1072,30 @@ class PaginatedConfirmReviewRuleResult(BaseModel):
     total: int
     items: List['ConfirmReviewRuleResultOut']
 
+class ContractInfo(BaseModel):
+    """合同信息模型"""
+    contract_id: Optional[str] = None
+    contract_name: Optional[str] = None
+
+@unified_response
 @router.get("/confirm-review-rule-results/page", response_model=PaginatedConfirmReviewRuleResult)
 def paginated_confirm_review_rule_results(
     rule_id: Optional[int] = Query(None),
     session_id: Optional[str] = Query(None),
     review_result: Optional[str] = Query(None),
-    skip: int = Query(0, ge=0, description="跳过记录数"),
-    limit: int = Query(20, ge=1, le=100, description="每页数量"),
+    skip: Optional[int] = Query(None, ge=0, description="跳过记录数"),
+    limit: Optional[int] = Query(None, ge=1, le=100, description="每页数量"),
+    page: Optional[int] = Query(None, description="页码（兼容参数）"),
+    pageSize: Optional[int] = Query(None, description="每页数量（兼容参数）"),
     db: Session = Depends(get_session)
 ):
+    if page is not None and pageSize is not None:
+        skip = (page - 1) * pageSize
+        limit = pageSize
+    if skip is None:
+        skip = 0
+    if limit is None:
+        limit = 20
     query = db.query(ConfirmReviewRuleResult)
     if rule_id:
         query = query.filter(ConfirmReviewRuleResult.rule_id == rule_id)
@@ -1049,6 +1109,19 @@ def paginated_confirm_review_rule_results(
         total=total,
         items=[ConfirmReviewRuleResultOut.from_orm(obj) for obj in results]
     )
+@router.get("/confirm-review-rule-results/by-contract", response_model=List[ContractInfo])
+def get_rule_results_by_contract_id(
+    contract_id: Optional[str] = Query(None, description="合同ID，可选"),
+    db: Session = Depends(get_session)
+):
+    """
+    获取合同信息列表，只返回contract_id和contract_name
+    """
+    query = db.query(ConfirmReviewRuleResult.contract_id, ConfirmReviewRuleResult.contract_name)
+    if contract_id:
+        query = query.filter(ConfirmReviewRuleResult.contract_id == contract_id)
+    results = query.distinct().order_by(ConfirmReviewRuleResult.contract_id.desc()).all()
+    return [ContractInfo(contract_id=result[0], contract_name=result[1]) for result in results]
 
 @router.get("/confirm-review-rule-results/created-times")
 def get_confirm_rule_result_created_times(
@@ -1058,24 +1131,12 @@ def get_confirm_rule_result_created_times(
     """
     获取所有规则结果的去重创建日期（可按合同ID筛选，用于下拉筛选）
     """
-    from sqlalchemy import func
     query = db.query(func.date(ConfirmReviewRuleResult.created_at))
     if contract_id:
         query = query.filter(ConfirmReviewRuleResult.contract_id == contract_id)
     dates = query.distinct().order_by(func.date(ConfirmReviewRuleResult.created_at).desc()).all()
     date_list = [str(d[0]) for d in dates if d[0] is not None]
     return {"dates": date_list}
-
-@router.get("/confirm-review-rule-results/by-contract", response_model=List[ConfirmReviewRuleResultOut])
-def get_rule_results_by_contract_id(
-    contract_id: str = Query(..., description="合同ID"),
-    db: Session = Depends(get_session)
-):
-    """
-    通过合同ID获取所有规则结果
-    """
-    results = db.query(ConfirmReviewRuleResult).filter(ConfirmReviewRuleResult.contract_id == contract_id).order_by(ConfirmReviewRuleResult.id.desc()).all()
-    return [ConfirmReviewRuleResultOut.from_orm(obj) for obj in results]
 
 if __name__ == "__main__":
     import sys, os
