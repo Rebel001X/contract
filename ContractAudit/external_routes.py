@@ -165,27 +165,27 @@ class BaseResponse(BaseModel):
 
 # CRUD 路由
 @unified_response
-@router.post("/contract-audit-reviews", response_model=ContractAuditReviewOut)
+@router.post("/contract-audit-reviews")
 def create_review(review: ContractAuditReviewCreate, db: Session = Depends(get_session)):
     obj = create_contract_audit_review(db, review.dict())
     return obj
 
 @unified_response
-@router.get("/contract-audit-reviews/{review_id}", response_model=ContractAuditReviewOut)
+@router.get("/contract-audit-reviews/{review_id}")
 def get_review(review_id: int, db: Session = Depends(get_session)):
     obj = get_contract_audit_review(db, review_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Review not found")
-    return {"code": 0, "data": obj, "maxPage": 1, "message": ""}
+    return obj
 
 @unified_response
 @router.get("/contract-audit-reviews")
 def list_reviews(skip: int = 0, limit: int = 100, db: Session = Depends(get_session)):
     data = list_contract_audit_reviews(db, skip=skip, limit=limit)
-    return {"code": 0, "data": data, "maxPage": 1, "message": ""}
+    return {"items": data}
 
 @unified_response
-@router.put("/contract-audit-reviews/{review_id}", response_model=ContractAuditReviewOut)
+@router.put("/contract-audit-reviews/{review_id}")
 def update_review(review_id: int, review: ContractAuditReviewUpdate, db: Session = Depends(get_session)):
     obj = update_contract_audit_review(db, review_id, review.dict(exclude_unset=True))
     if not obj:
@@ -222,7 +222,7 @@ async def upload_local_docx():
         raise HTTPException(status_code=500, detail=f"外部服务调用失败: {str(e)}")
 
 @unified_response
-@router.get("/contract-audit-reviews/page", response_model=PaginatedContractAuditReview)
+@router.get("/contract-audit-reviews/page")
 def paginated_reviews(
     page: int = Query(1, ge=1, description="页码，从1开始"),
     page_size: int = Query(10, ge=1, le=100, description="每页数量"),
@@ -245,10 +245,10 @@ def paginated_reviews(
     total = query.count()
     items = query.order_by(ContractAuditReview.updated_at.desc()).offset(skip).limit(page_size).all()
     max_page = (total + page_size - 1) // page_size if page_size else 1
-    return {"code": 0, "data": {"total": total, "items": items}, "maxPage": max_page, "message": ""}
+    return {"total": total, "items": items, "maxPage": max_page}
 
 @unified_response
-@router.get("/contract-audit-reviews/by-session/{session_id}", response_model=List[ContractAuditReviewOut])
+@router.get("/contract-audit-reviews/by-session/{session_id}")
 def get_reviews_by_session(session_id: str, db: Session = Depends(get_session)):
     """
     根据会话ID获取审查记录
@@ -258,7 +258,7 @@ def get_reviews_by_session(session_id: str, db: Session = Depends(get_session)):
         ContractAuditReview.is_deleted == False
     ).order_by(ContractAuditReview.created_at.desc()).all()
     
-    return {"code": 0, "data": reviews, "maxPage": 1, "message": ""}
+    return {"items": reviews}
 
 @unified_response
 @router.get("/contract-audit-reviews/stats")
@@ -548,7 +548,7 @@ async def sync_review_rules_to_db(background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail=f"同步审查规则失败: {str(e)}")
 
 @unified_response
-@router.get("/review-rules", response_model=List[dict])
+@router.get("/review-rules")
 def get_saved_review_rules(
     skip: int = Query(0, ge=0, description="跳过记录数"),
     limit: int = Query(100, ge=1, le=1000, description="返回记录数"),
@@ -559,7 +559,7 @@ def get_saved_review_rules(
     """
     try:
         rules = list_review_rules(db, skip=skip, limit=limit)
-        return [
+        return {"items": [
             {
                 "id": rule.id,
                 "rule_name": rule.rule_name,
@@ -582,7 +582,7 @@ def get_saved_review_rules(
                 "update_time": rule.update_time.isoformat() if rule.update_time else None
             }
             for rule in rules
-        ]
+        ]}
     except Exception as e:
         print(f"获取保存的审查规则异常: {e}")
         raise HTTPException(status_code=500, detail=f"获取审查规则失败: {str(e)}")
@@ -867,7 +867,7 @@ class ConfirmReviewDetailOut(BaseModel):
     rule_results: List[ConfirmReviewRuleResultOut]
 
 @unified_response
-@router.get("/confirm-reviews", response_model=List[ConfirmReviewSessionOut])
+@router.get("/confirm-reviews")
 def get_confirm_review_sessions(
     user_id: Optional[str] = Query(None, description="用户ID"),
     skip: int = Query(0, ge=0, description="跳过记录数"),
@@ -879,7 +879,7 @@ def get_confirm_review_sessions(
     """
     from .models import list_confirm_review_sessions
     sessions = list_confirm_review_sessions(db, user_id=user_id, skip=skip, limit=limit)
-    return sessions
+    return {"items": sessions}
 
 @unified_response
 @router.get("/confirm-reviews/{session_id}", response_model=ConfirmReviewDetailOut)
@@ -1046,7 +1046,7 @@ def update_user_feedback_by_rule_id(request: UserFeedbackRequest = Body(...), db
 
 # 分页查询接口
 @unified_response
-@router.get("/confirm-review-rule-results", response_model=List[ConfirmReviewRuleResultOut])
+@router.get("/confirm-review-rule-results")
 def list_confirm_rule_results(
     session_id: Optional[str] = Query(None),
     rule_id: Optional[int] = Query(None),
@@ -1066,7 +1066,7 @@ def list_confirm_rule_results(
     if review_result:
         query = query.filter(ConfirmReviewRuleResult.review_result == review_result)
     results = query.order_by(ConfirmReviewRuleResult.id.desc()).offset(skip).limit(limit).all()
-    return [ConfirmReviewRuleResultOut.from_orm(obj) for obj in results]
+    return {"items": [ConfirmReviewRuleResultOut.from_orm(obj) for obj in results]}
 
 class PaginatedConfirmReviewRuleResult(BaseModel):
     total: int
@@ -1077,8 +1077,7 @@ class ContractInfo(BaseModel):
     contract_id: Optional[str] = None
     contract_name: Optional[str] = None
 
-@unified_response
-@router.get("/confirm-review-rule-results/page", response_model=PaginatedConfirmReviewRuleResult)
+@router.get("/confirm-review-rule-results/page")
 def paginated_confirm_review_rule_results(
     rule_id: Optional[int] = Query(None),
     session_id: Optional[str] = Query(None),
@@ -1105,11 +1104,15 @@ def paginated_confirm_review_rule_results(
         query = query.filter(ConfirmReviewRuleResult.review_result == review_result)
     total = query.count()
     results = query.order_by(ConfirmReviewRuleResult.id.desc()).offset(skip).limit(limit).all()
-    return PaginatedConfirmReviewRuleResult(
-        total=total,
-        items=[ConfirmReviewRuleResultOut.from_orm(obj) for obj in results]
-    )
-@router.get("/confirm-review-rule-results/by-contract", response_model=List[ContractInfo])
+    max_page = (total + limit - 1) // limit if limit > 0 else 1
+    return {
+        "code": 0,
+        "data": [ConfirmReviewRuleResultOut.from_orm(obj) for obj in results],
+        "maxPage": max_page,
+        "message": "",
+        "total": total
+    }
+@router.get("/confirm-review-rule-results/by-contract")
 def get_rule_results_by_contract_id(
     contract_id: Optional[str] = Query(None, description="合同ID，可选"),
     db: Session = Depends(get_session)
@@ -1120,8 +1123,17 @@ def get_rule_results_by_contract_id(
     query = db.query(ConfirmReviewRuleResult.contract_id, ConfirmReviewRuleResult.contract_name)
     if contract_id:
         query = query.filter(ConfirmReviewRuleResult.contract_id == contract_id)
+    # 过滤掉contract_id为null的记录
+    query = query.filter(ConfirmReviewRuleResult.contract_id.isnot(None))
+    query = query.filter(ConfirmReviewRuleResult.contract_id != '')
     results = query.distinct().order_by(ConfirmReviewRuleResult.contract_id.desc()).all()
-    return [ContractInfo(contract_id=result[0], contract_name=result[1]) for result in results]
+    data = [ContractInfo(contract_id=result[0], contract_name=result[1]) for result in results]
+    return {
+        "code": 0,
+        "data": data,
+        "maxPage": 1,
+        "message": ""
+    }
 
 @router.get("/confirm-review-rule-results/created-times")
 def get_confirm_rule_result_created_times(
@@ -1136,7 +1148,20 @@ def get_confirm_rule_result_created_times(
         query = query.filter(ConfirmReviewRuleResult.contract_id == contract_id)
     dates = query.distinct().order_by(func.date(ConfirmReviewRuleResult.created_at).desc()).all()
     date_list = [str(d[0]) for d in dates if d[0] is not None]
-    return {"dates": date_list}
+    return {
+        "code": 0,
+        "data": {"dates": date_list},
+        "maxPage": 1,
+        "message": ""
+    }
+
+@unified_response
+@router.get("/test-unified-response")
+def test_unified_response():
+    """
+    测试统一响应格式装饰器
+    """
+    return "hello world"
 
 if __name__ == "__main__":
     import sys, os
