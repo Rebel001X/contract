@@ -231,6 +231,8 @@ class ConfirmReviewRuleResult(Base):
     is_approved = Column(Boolean, nullable=True, comment='审核是否通过标志')
     contract_id = Column(String(255), nullable=True, comment='合同ID')
     contract_name = Column(String(500), nullable=True, comment='合同名称')
+    risk_attribution_id = Column(Integer, nullable=True, comment='风险归属ID')
+    contract_type = Column(String(50), nullable=True, comment='合同类型')
     
     # 时间戳
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, comment='创建时间')
@@ -272,11 +274,30 @@ def update_confirm_review_session(db: Session, session_id: str, update_data: dic
 
 def create_confirm_review_rule_result(db: Session, result_data: dict) -> ConfirmReviewRuleResult:
     """创建单个规则审查结果"""
-    result = ConfirmReviewRuleResult(**result_data)
-    db.add(result)
+    obj = ConfirmReviewRuleResult(
+        session_id=result_data.get('session_id'),
+        rule_id=result_data.get('rule_id'),
+        rule_name=result_data.get('rule_name'),
+        rule_index=result_data.get('rule_index'),
+        review_result=result_data.get('review_result'),
+        risk_level=result_data.get('risk_level'),
+        matched_content=result_data.get('matched_content'),
+        analysis=result_data.get('analysis'),
+        issues=result_data.get('issues'),
+        suggestions=result_data.get('suggestions'),
+        confidence_score=result_data.get('confidence_score'),
+        user_feedback=result_data.get('user_feedback'),
+        feedback_suggestion=result_data.get('feedback_suggestion'),
+        is_approved=result_data.get('is_approved'),
+        contract_id=result_data.get('contract_id'),
+        contract_name=result_data.get('contract_name'),
+        risk_attribution_id=result_data.get('risk_attribution_id'),
+        contract_type=result_data.get('contract_type'),
+    )
+    db.add(obj)
     db.commit()
-    db.refresh(result)
-    return result
+    db.refresh(obj)
+    return obj
 
 def bulk_create_confirm_review_rule_results(db: Session, results_data: list) -> list:
     """批量创建规则审查结果"""
@@ -284,27 +305,45 @@ def bulk_create_confirm_review_rule_results(db: Session, results_data: list) -> 
     print(f"[DEBUG] 输入数据: {results_data}")
     
     try:
-        results = []
+        objs = []
         for i, result_data in enumerate(results_data):
             print(f"[DEBUG] 处理第 {i+1} 条数据: {result_data}")
-            result = ConfirmReviewRuleResult(**result_data)
-            results.append(result)
+            obj = ConfirmReviewRuleResult(
+                session_id=result_data.get('session_id'),
+                rule_id=result_data.get('rule_id'),
+                rule_name=result_data.get('rule_name'),
+                rule_index=result_data.get('rule_index'),
+                review_result=result_data.get('review_result'),
+                risk_level=result_data.get('risk_level'),
+                matched_content=result_data.get('matched_content'),
+                analysis=result_data.get('analysis'),
+                issues=result_data.get('issues'),
+                suggestions=result_data.get('suggestions'),
+                confidence_score=result_data.get('confidence_score'),
+                user_feedback=result_data.get('user_feedback'),
+                feedback_suggestion=result_data.get('feedback_suggestion'),
+                is_approved=result_data.get('is_approved'),
+                contract_id=result_data.get('contract_id'),
+                contract_name=result_data.get('contract_name'),
+                risk_attribution_id=result_data.get('risk_attribution_id'),
+                contract_type=result_data.get('contract_type'),
+            )
+            objs.append(obj)
+            db.add(obj)
         
-        print(f"[DEBUG] 准备添加到数据库，对象数量: {len(results)}")
-        db.add_all(results)
-        print(f"[DEBUG] 执行 commit...")
+        print(f"[DEBUG] 准备添加到数据库，对象数量: {len(objs)}")
         db.commit()
         print(f"[DEBUG] commit 成功")
         
         # 刷新所有对象以获取ID
         created_ids = []
-        for result in results:
-            db.refresh(result)
-            created_ids.append(result.id)
-            print(f"[DEBUG] 刷新对象，ID: {result.id}, session_id: {result.session_id}, rule_name: {result.rule_name}")
+        for obj in objs:
+            db.refresh(obj)
+            created_ids.append(obj.id)
+            print(f"[DEBUG] 刷新对象，ID: {obj.id}, session_id: {obj.session_id}, rule_name: {obj.rule_name}")
         
         print(f"[DEBUG] bulk_create_confirm_review_rule_results 完成，创建的ID列表: {created_ids}")
-        return results
+        return objs
         
     except Exception as e:
         print(f"[ERROR] bulk_create_confirm_review_rule_results 异常: {e}")

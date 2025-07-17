@@ -1134,6 +1134,14 @@ async def chat_confirm(request: Request):
                             'user_feedback': rule_result.get('user_feedback', None),
                             'contract_id': contract_id,  # 新增：存合同ID
                             'contract_name': project_name,  # 新增：存合同名称
+                            # 新增：存 risk_attribution_id，优先取 rule_result，再取 rule_id_to_rule
+                            'risk_attribution_id': (
+                                rule_result.get('riskAttributionId')
+                                if rule_result.get('riskAttributionId') is not None else
+                                rule_result.get('risk_attribution_id')
+                                if rule_result.get('risk_attribution_id') is not None else
+                                rule_id_to_rule.get(rule_result.get('rule_id', 0), {}).get('riskAttributionId')
+                            ),
                         }
                         log_debug(f"[DEBUG] 构建的 result_data: {result_data}")
                         rule_results_data.append(result_data)

@@ -28,6 +28,7 @@ import sys
 import os
 from sqlalchemy import func
 from datetime import datetime
+from sqlalchemy import or_
 
 # Robust import for unified_response
 try:
@@ -813,6 +814,9 @@ class ConfirmReviewRuleResultOut(BaseModel):
     feedback_suggestion: Optional[str] = None  # 反馈建议内容
     is_approved: Optional[bool] = None  # 审核是否通过标志
     contract_id: Optional[str] = None  # 合同ID
+    contract_name: Optional[str] = None  # 合同名称
+    risk_attribution_id: Optional[int] = None  # 风险归属ID
+    contract_type: Optional[str] = None  # 合同类型
     created_at: Optional[datetime] = None
 
     class Config:
@@ -838,6 +842,9 @@ class ConfirmReviewRuleResultOut(BaseModel):
             'feedback_suggestion': obj.feedback_suggestion,
             'is_approved': obj.is_approved,
             'contract_id': obj.contract_id,
+            'contract_name': obj.contract_name,
+            'risk_attribution_id': getattr(obj, 'risk_attribution_id', None),
+            'contract_type': getattr(obj, 'contract_type', None),
             'created_at': obj.created_at.isoformat() if obj.created_at else None
         }
         return cls(**data)
@@ -860,6 +867,8 @@ class ConfirmReviewRuleResultIn(BaseModel):
     is_approved: Optional[bool] = None  # 审核是否通过标志
     contract_id: Optional[str] = None  # 合同ID
     contract_name: Optional[str] = None  # 合同名称
+    risk_attribution_id: Optional[int] = None  # 风险归属ID
+    contract_type: Optional[str] = None  # 合同类型
 
 class ConfirmReviewDetailOut(BaseModel):
     """Confirm审查详情输出模型"""
@@ -1082,6 +1091,14 @@ def paginated_confirm_review_rule_results(
     rule_id: Optional[int] = Query(None),
     session_id: Optional[str] = Query(None),
     review_result: Optional[str] = Query(None),
+    rule_name: Optional[str] = Query(None),
+    risk_level: Optional[str] = Query(None),
+    contract_id: Optional[str] = Query(None),
+    contract_name: Optional[str] = Query(None),
+    risk_attribution_id: Optional[int] = Query(None),
+    contract_type: Optional[str] = Query(None),
+    created_time: Optional[str] = Query(None, description="创建时间，格式YYYY-MM-DD HH:MM:SS"),
+    keyword: Optional[str] = Query(None, description="关键字模糊查找"),
     skip: Optional[int] = Query(None, ge=0, description="跳过记录数"),
     limit: Optional[int] = Query(None, ge=1, le=100, description="每页数量"),
     page: Optional[int] = Query(None, description="页码（兼容参数）"),
@@ -1102,6 +1119,33 @@ def paginated_confirm_review_rule_results(
         query = query.filter(ConfirmReviewRuleResult.session_id == session_id)
     if review_result:
         query = query.filter(ConfirmReviewRuleResult.review_result == review_result)
+    if rule_name:
+        query = query.filter(ConfirmReviewRuleResult.rule_name == rule_name)
+    if risk_level:
+        query = query.filter(ConfirmReviewRuleResult.risk_level == risk_level)
+    if contract_id:
+        query = query.filter(ConfirmReviewRuleResult.contract_id == contract_id)
+    if contract_name:
+        query = query.filter(ConfirmReviewRuleResult.contract_name == contract_name)
+    if risk_attribution_id:
+        query = query.filter(ConfirmReviewRuleResult.risk_attribution_id == risk_attribution_id)
+    if contract_type:
+        query = query.filter(ConfirmReviewRuleResult.contract_type == contract_type)
+    if created_time:
+        try:
+            dt = datetime.strptime(created_time, "%Y-%m-%d %H:%M:%S")
+            query = query.filter(ConfirmReviewRuleResult.created_at == dt)
+        except Exception:
+            pass  # 忽略格式错误，返回全部
+    if keyword:
+        like_pattern = f"%{keyword}%"
+        query = query.filter(
+            or_(
+                ConfirmReviewRuleResult.rule_name.ilike(like_pattern),
+                ConfirmReviewRuleResult.analysis.ilike(like_pattern),
+                ConfirmReviewRuleResult.matched_content.ilike(like_pattern)
+            )
+        )
     total = query.count()
     results = query.order_by(ConfirmReviewRuleResult.id.desc()).offset(skip).limit(limit).all()
     max_page = (total + limit - 1) // limit if limit > 0 else 1
@@ -1141,16 +1185,16 @@ def get_confirm_rule_result_created_times(
     db: Session = Depends(get_session)
 ):
     """
-    获取所有规则结果的去重创建日期（可按合同ID筛选，用于下拉筛选）
+    获取所有规则结果的去重创建时间（精确到秒，可按合同ID筛选，用于下拉筛选）
     """
-    query = db.query(func.date(ConfirmReviewRuleResult.created_at))
+    query = db.query(ConfirmReviewRuleResult.created_at)
     if contract_id:
         query = query.filter(ConfirmReviewRuleResult.contract_id == contract_id)
-    dates = query.distinct().order_by(func.date(ConfirmReviewRuleResult.created_at).desc()).all()
-    date_list = [str(d[0]) for d in dates if d[0] is not None]
+    datetimes = query.distinct().order_by(ConfirmReviewRuleResult.created_at.desc()).all()
+    datetime_list = [d[0].strftime('%Y-%m-%d %H:%M:%S') for d in datetimes if d[0] is not None]
     return {
         "code": 0,
-        "data": {"dates": date_list},
+        "data": datetime_list,  # 精确到秒
         "maxPage": 1,
         "message": ""
     }
