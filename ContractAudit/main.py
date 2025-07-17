@@ -618,13 +618,24 @@ async def chat_confirm(request: Request):
         review_stage = message_data.get("reviewStage")
         review_list_count = message_data.get("reviewList", 0)
         review_rules = message_data.get("reviewRules", [])
-        contract_id = message_data.get("contract_id")  # 新增：从message中提取合同ID
+        contract_id = message_data.get("contract_id")  # 从message中提取合同ID
         print(f"[DEBUG] 解析到审查规则: {len(review_rules)} 条规则", file=sys.stderr)
     except (json.JSONDecodeError, TypeError):
         # 如果不是 JSON 格式，当作普通消息处理
         contract_id = None
         print(f"[DEBUG] message 不是 JSON 格式，作为普通消息处理: {message}", file=sys.stderr)
         pass
+    
+    # 确保contract_id和contract_name有值，即使前端没有传递
+    if not contract_id:
+        # 尝试从session_id生成contract_id
+        contract_id = f"contract_{session_id}" if session_id else None
+        print(f"[DEBUG] 使用session_id生成contract_id: {contract_id}", file=sys.stderr)
+    
+    if not project_name:
+        # 尝试从session_id生成project_name
+        project_name = f"项目_{session_id}" if session_id else "默认项目"
+        print(f"[DEBUG] 使用session_id生成project_name: {project_name}", file=sys.stderr)
 
     async def event_stream():
         import json

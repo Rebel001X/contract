@@ -4,6 +4,14 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session
 from datetime import datetime
+import pytz
+
+# 设置中国时区
+CHINA_TZ = pytz.timezone('Asia/Shanghai')
+
+def china_now():
+    """获取中国当前时间"""
+    return datetime.now(CHINA_TZ)
 
 Base = declarative_base()
 
@@ -23,8 +31,8 @@ class ContractAuditReview(Base):
     review_comment = Column(Text, nullable=True, comment='审查备注/说明（长文本）')
     is_deleted = Column(Boolean, nullable=False, default=False, comment='是否删除 0-正常 1-已删除')
     ext_json = Column(JSON, nullable=True, comment='扩展字段（可存储额外信息）')
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, comment='修改时间')
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, comment='创建时间')
+    updated_at = Column(DateTime, nullable=False, default=china_now, onupdate=china_now, comment='修改时间')
+    created_at = Column(DateTime, nullable=False, default=china_now, comment='创建时间')
 
     def __repr__(self):
         return f"<ContractAuditReview(id={self.id}, project_name={self.project_name}, risk_level={self.risk_level})>"
@@ -56,7 +64,7 @@ class ReviewRule(Base):
     creator_id = Column(Integer, nullable=True, comment='创建者id')
     creator_name = Column(String(255), nullable=True, comment='创建者姓名')
     version = Column(Integer, nullable=False, default=1, comment='版本号')
-    update_time = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, comment='更新时间')
+    update_time = Column(DateTime, nullable=False, default=china_now, onupdate=china_now, comment='更新时间')
 
     def __repr__(self):
         return f"<ReviewRule(id={self.id}, rule_name={self.rule_name}, risk_level={self.risk_level})>"
@@ -187,8 +195,8 @@ class ConfirmReviewSession(Base):
     error_message = Column(Text, nullable=True, comment='错误信息')
     
     # 时间戳
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, comment='创建时间')
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, comment='更新时间')
+    created_at = Column(DateTime, nullable=False, default=china_now, comment='创建时间')
+    updated_at = Column(DateTime, nullable=False, default=china_now, onupdate=datetime.utcnow, comment='更新时间')
 
     def __repr__(self):
         return f"<ConfirmReviewSession(id={self.id}, session_id={self.session_id}, project_name={self.project_name})>"
@@ -235,7 +243,7 @@ class ConfirmReviewRuleResult(Base):
     contract_type = Column(String(50), nullable=True, comment='合同类型')
     
     # 时间戳
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, comment='创建时间')
+    created_at = Column(DateTime, nullable=False, default=china_now, comment='创建时间')
 
     def __repr__(self):
         return f"<ConfirmReviewRuleResult(id={self.id}, session_id={self.session_id}, rule_name={self.rule_name})>"

@@ -8,7 +8,7 @@ from typing import Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from pathlib import Path
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 
@@ -217,6 +217,14 @@ METRICS_PORT=8002
 
 # SQLAlchemy数据库引擎和Session
 engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True, future=True)
+
+# 设置数据库连接时区
+@event.listens_for(engine, "connect")
+def set_timezone(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("SET time_zone = '+08:00'")
+    cursor.close()
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
 
 def get_engine():

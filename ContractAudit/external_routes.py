@@ -27,8 +27,9 @@ import threading
 import sys
 import os
 from sqlalchemy import func
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import or_
+import pytz
 
 # Robust import for unified_response
 try:
@@ -1098,6 +1099,7 @@ def paginated_confirm_review_rule_results(
     risk_attribution_id: Optional[int] = Query(None),
     contract_type: Optional[str] = Query(None),
     created_time: Optional[str] = Query(None, description="创建时间，格式YYYY-MM-DD HH:MM:SS"),
+    created_at: Optional[str] = Query(None, description="创建时间（兼容参数），格式YYYY-MM-DD HH:MM:SS"),
     keyword: Optional[str] = Query(None, description="关键字模糊查找"),
     skip: Optional[int] = Query(None, ge=0, description="跳过记录数"),
     limit: Optional[int] = Query(None, ge=1, le=100, description="每页数量"),
@@ -1131,12 +1133,51 @@ def paginated_confirm_review_rule_results(
         query = query.filter(ConfirmReviewRuleResult.risk_attribution_id == risk_attribution_id)
     if contract_type:
         query = query.filter(ConfirmReviewRuleResult.contract_type == contract_type)
-    if created_time:
+    # 处理时间过滤，支持 created_time 和 created_at 两个参数
+    time_filter = created_time or created_at
+    if time_filter:
         try:
-            dt = datetime.strptime(created_time, "%Y-%m-%d %H:%M:%S")
-            query = query.filter(ConfirmReviewRuleResult.created_at == dt)
-        except Exception:
-            pass  # 忽略格式错误，返回全部
+            # 支持多种时间格式
+            dt = None
+            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
+                try:
+                    dt = datetime.strptime(time_filter, fmt)
+                    break
+                except ValueError:
+                    continue
+            
+            if dt:
+                # 先加中国时区，再去掉时区，确保与数据库无时区字段比较
+                china_tz = pytz.timezone('Asia/Shanghai')
+                if dt.tzinfo is None:
+                    dt = china_tz.localize(dt)
+                # 去掉时区信息
+                dt = dt.replace(tzinfo=None)
+                # 根据格式类型进行不同的过滤
+                if len(time_filter) == 19:  # YYYY-MM-DD HH:MM:SS - 精确到秒
+                    start_time = dt
+                    end_time = dt + timedelta(seconds=1)
+                    query = query.filter(
+                        ConfirmReviewRuleResult.created_at >= start_time,
+                        ConfirmReviewRuleResult.created_at < end_time
+                    )
+                elif len(time_filter) == 16:  # YYYY-MM-DD HH:MM - 精确到分钟
+                    start_time = dt
+                    end_time = dt + timedelta(minutes=1)
+                    query = query.filter(
+                        ConfirmReviewRuleResult.created_at >= start_time,
+                        ConfirmReviewRuleResult.created_at < end_time
+                    )
+                elif len(time_filter) == 10:  # YYYY-MM-DD - 精确到天
+                    start_time = dt
+                    end_time = dt + timedelta(days=1)
+                    query = query.filter(
+                        ConfirmReviewRuleResult.created_at >= start_time,
+                        ConfirmReviewRuleResult.created_at < end_time
+                    )
+        except Exception as e:
+            print(f"时间过滤解析错误: {e}, 时间参数: {time_filter}")
+            # 不抛出异常，继续查询但不进行时间过滤
     if keyword:
         like_pattern = f"%{keyword}%"
         query = query.filter(
