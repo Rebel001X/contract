@@ -1,0 +1,7 @@
+{
+  "session_id": "test_session_1234567890",
+  "message": "{\"review_stage\":\"合同主体审查\",\"review_list\":2,\"contract_id\":\"test_contract_001\",\"review_rules\":[{\"id\":1,\"ruleName\":\"付款条款风险审查\",\"type\":\"付款条款审查\",\"riskLevel\":\"high\",\"riskAttributionId\":101,\"riskAttributionName\":\"财务部\",\"ruleGroupId\":1,\"ruleGroupName\":\"付款条款组\",\"reviseOpinion\":\"建议修改付款条件\",\"conditionList\":[{\"condition\":\"付款期限超过30天\",\"description\":\"检查合同中是否有付款期限超过30天的条款\"}]},{\"id\":2,\"ruleName\":\"违约责任审查\",\"type\":\"违约条款审查\",\"riskLevel\":\"medium\",\"riskAttributionId\":102,\"riskAttributionName\":\"法务部\",\"ruleGroupId\":2,\"ruleGroupName\":\"违约责任组\",\"reviseOpinion\":\"建议明确违约责任\",\"conditionList\":[{\"condition\":\"违约责任不明确\",\"description\":\"检查违约责任条款是否明确具体\"}]}]}",
+  "auto_save": true,
+  "user_id": "test_user_001",
+  "project_name": "测试合同审查项目"
+} 

@@ -1,0 +1,10 @@
+{
+  "contract_id": "123",
+  "session_id": "test_session_001",
+  "query": "请分析这份合同的风险点",
+  "user_id": "user_001",
+  "project_name": "测试项目",
+  "review_type": "comprehensive",
+  "risk_level_filter": "all",
+  "include_details": true
+} 

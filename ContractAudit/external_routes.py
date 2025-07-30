@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, BackgroundTasks, Body
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import List, Optional, Any
+from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
 from .models import (
     ContractAuditReview,
@@ -30,6 +30,9 @@ from sqlalchemy import func
 from datetime import datetime, timedelta
 from sqlalchemy import or_
 import pytz
+from fastapi.responses import JSONResponse
+import traceback
+import json
 
 # Robust import for unified_response
 try:
@@ -223,31 +226,31 @@ async def upload_local_docx():
         print("外部服务调用异常:", e)
         raise HTTPException(status_code=500, detail=f"外部服务调用失败: {str(e)}")
 
-@unified_response
-@router.get("/contract-audit-reviews/page")
-def paginated_reviews(
-    page: int = Query(1, ge=1, description="页码，从1开始"),
-    page_size: int = Query(10, ge=1, le=100, description="每页数量"),
-    session_id: Optional[str] = Query(None, description="会话ID过滤"),
-    risk_level: Optional[str] = Query(None, description="风险等级过滤"),
-    review_status: Optional[str] = Query(None, description="审查状态过滤"),
-    db: Session = Depends(get_session)
-):
-    skip = (page - 1) * page_size
-    query = db.query(ContractAuditReview).filter(ContractAuditReview.is_deleted == False)
-    
-    # 添加过滤条件
-    if session_id:
-        query = query.filter(ContractAuditReview.ext_json.contains({"session_id": session_id}))
-    if risk_level:
-        query = query.filter(ContractAuditReview.risk_level == risk_level)
-    if review_status:
-        query = query.filter(ContractAuditReview.review_status == review_status)
-    
-    total = query.count()
-    items = query.order_by(ContractAuditReview.updated_at.desc()).offset(skip).limit(page_size).all()
-    max_page = (total + page_size - 1) // page_size if page_size else 1
-    return {"total": total, "items": items, "maxPage": max_page}
+# @unified_response
+# @router.get("/contract-audit-reviews/page")
+# def paginated_reviews(
+#     page: int = Query(1, ge=1, description="页码，从1开始"),
+#     page_size: int = Query(10, ge=1, le=100, description="每页数量"),
+#     session_id: Optional[str] = Query(None, description="会话ID过滤"),
+#     risk_level: Optional[str] = Query(None, description="风险等级过滤"),
+#     review_status: Optional[str] = Query(None, description="审查状态过滤"),
+#     db: Session = Depends(get_session)
+# ):
+#     skip = (page - 1) * page_size
+#     query = db.query(ContractAuditReview).filter(ContractAuditReview.is_deleted == False)
+#     
+#     # 添加过滤条件
+#     if session_id:
+#         query = query.filter(ContractAuditReview.ext_json.contains({"session_id": session_id}))
+#     if risk_level:
+#         query = query.filter(ContractAuditReview.risk_level == risk_level)
+#     if review_status:
+#         query = query.filter(ContractAuditReview.review_status == review_status)
+#     
+#     total = query.count()
+#     items = query.order_by(ContractAuditReview.updated_at.desc()).offset(skip).limit(page_size).all()
+#     max_page = (total + page_size - 1) // page_size if page_size else 1
+#     return {"total": total, "items": items, "maxPage": max_page}
 
 @unified_response
 @router.get("/contract-audit-reviews/by-session/{session_id}")
@@ -806,10 +809,10 @@ class ConfirmReviewRuleResultOut(BaseModel):
     rule_index: int
     review_result: str
     risk_level: str
-    matched_content: Optional[str] = None
-    analysis: Optional[str] = None
-    issues: Optional[list] = None
-    suggestions: Optional[list] = None
+    matched_content: Optional[List[Any]] = None
+    analysis: Optional[List[Any]] = None
+    issues: Optional[List[Any]] = None
+    suggestions: Optional[List[Any]] = None
     confidence_score: int
     user_feedback: Optional[int] = None  # 0=点踩, 1=点赞, null=无反馈
     feedback_suggestion: Optional[str] = None  # 反馈建议内容
@@ -818,7 +821,25 @@ class ConfirmReviewRuleResultOut(BaseModel):
     contract_name: Optional[str] = None  # 合同名称
     risk_attribution_id: Optional[int] = None  # 风险归属ID
     contract_type: Optional[str] = None  # 合同类型
+    risk_attribution_name: Optional[str] = None  # 新增：风险归属名
     created_at: Optional[datetime] = None
+
+    @validator('issues', 'suggestions', 'analysis', 'matched_content', pre=True)
+    def parse_json_list(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            try:
+                loaded = json.loads(v)
+                if isinstance(loaded, list):
+                    return loaded
+                return [loaded]
+            except Exception:
+                # 普通字符串直接包一层
+                return [v]
+        if isinstance(v, list):
+            return v
+        return [v]
 
     class Config:
         orm_mode = True
@@ -845,6 +866,9 @@ class ConfirmReviewRuleResultOut(BaseModel):
             'contract_id': obj.contract_id,
             'contract_name': obj.contract_name,
             'risk_attribution_id': getattr(obj, 'risk_attribution_id', None),
+            'risk_attribution_name': getattr(obj, 'risk_attribution_name', None),
+            'riskAttributionId': getattr(obj, 'risk_attribution_id', None),
+            'riskAttributionName': getattr(obj, 'risk_attribution_name', None),
             'contract_type': getattr(obj, 'contract_type', None),
             'created_at': obj.created_at.isoformat() if obj.created_at else None
         }
@@ -1010,6 +1034,8 @@ class UserFeedbackRequest(BaseModel):
     feedback_suggestion: Optional[str] = Field(None, description="反馈建议内容")
     is_approved: Optional[bool] = Field(None, description="审核是否通过标志")
     contract_id: Optional[str] = Field(None, description="合同ID")
+    manual_correction_en: Optional[str] = Field(None, description="人工修正英文")  # 新增
+    error_type: Optional[str] = Field(None, description="错误类型")  # 新增
 
 @unified_response
 @router.post("/confirm-review-rule-result/feedback")
@@ -1040,6 +1066,16 @@ def update_user_feedback_by_rule_id(request: UserFeedbackRequest = Body(...), db
     if is_approved is not None:
         obj.is_approved = is_approved
     
+    # 更新人工修正英文（如果提供）
+    manual_correction_en = getattr(request, 'manual_correction_en', None)
+    if manual_correction_en is not None:
+        obj.manual_correction_en = manual_correction_en
+    
+    # 更新错误类型（如果提供）
+    error_type = getattr(request, 'error_type', None)
+    if error_type is not None:
+        obj.error_type = error_type
+    
     db.commit()
     db.refresh(obj)
     
@@ -1050,6 +1086,8 @@ def update_user_feedback_by_rule_id(request: UserFeedbackRequest = Body(...), db
         "user_feedback": obj.user_feedback,
         "feedback_suggestion": obj.feedback_suggestion,
         "is_approved": obj.is_approved,
+        "manual_correction_en": obj.manual_correction_en,  # 新增
+        "error_type": obj.error_type,  # 新增
         "rule_id": rule_id,
         "id": obj.id
     }
@@ -1247,6 +1285,201 @@ def test_unified_response():
     测试统一响应格式装饰器
     """
     return "hello world"
+
+# 新增的API端点
+class DocParserRequest(BaseModel):
+    """文档解析请求模型"""
+    contract_id: str = Field(..., description="合同ID")
+    url: str = Field(..., description="文档URL")
+
+class DocParserResponse(BaseModel):
+    """文档解析响应模型"""
+    code: int = Field(200, description="响应状态码")
+    message: str = Field("success", description="响应消息")
+    data: Optional[dict] = Field(None, description="解析结果数据")
+
+class ContractViewRequest(BaseModel):
+    """合同查看请求模型"""
+    contract_id: Optional[str] = Field(None, description="合同ID")
+    session_id: Optional[str] = Field(None, description="会话ID")
+    query: Optional[str] = Field(None, description="查询内容")
+    user_id: Optional[str] = Field(None, description="用户ID")
+    project_name: Optional[str] = Field(None, description="项目名称")
+    review_type: Optional[str] = Field("comprehensive", description="审查类型")
+    risk_level_filter: Optional[str] = Field("all", description="风险等级过滤")
+    include_details: Optional[bool] = Field(True, description="是否包含详细信息")
+
+class ContractViewResponse(BaseModel):
+    """合同查看响应模型"""
+    code: int = Field(200, description="响应状态码")
+    message: str = Field("success", description="响应消息")
+    data: Optional[dict] = Field(None, description="查询结果数据")
+
+@router.post("/v1/doc_parser", response_model=DocParserResponse)
+async def doc_parser(request: DocParserRequest):
+    """
+    文档解析接口
+    
+    根据提供的合同ID和URL进行文档解析
+    """
+    try:
+        import requests
+        from urllib.parse import urlparse
+        import hashlib
+        
+        # 验证URL格式
+        parsed_url = urlparse(request.url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            raise ValueError("无效的URL格式")
+        
+        # 生成会话ID
+        session_id = hashlib.md5(f"{request.contract_id}_{request.url}".encode()).hexdigest()
+        
+        # 尝试下载文档内容
+        try:
+            response = requests.get(request.url, timeout=30)
+            response.raise_for_status()
+            content_length = len(response.content)
+            content_type = response.headers.get('content-type', 'unknown')
+        except requests.RequestException as e:
+            # 如果无法直接下载，记录URL信息
+            content_length = 0
+            content_type = 'url_only'
+        
+        # 创建解析任务记录
+        result_data = {
+            "contract_id": request.contract_id,
+            "url": request.url,
+            "session_id": session_id,
+            "parsed_content": {
+                "url": request.url,
+                "content_length": content_length,
+                "content_type": content_type,
+                "parsed_at": datetime.now().isoformat(),
+                "status": "completed" if content_length > 0 else "url_recorded"
+            },
+            "processing_info": {
+                "method": "url_parser",
+                "timestamp": datetime.now().isoformat(),
+                "user_agent": "ContractAudit-Parser/1.0"
+            },
+            "metadata": {
+                "domain": parsed_url.netloc,
+                "path": parsed_url.path,
+                "query": parsed_url.query,
+                "fragment": parsed_url.fragment
+            }
+        }
+        
+        # 如果成功获取内容，可以进一步处理
+        if content_length > 0:
+            result_data["parsed_content"]["extracted_text"] = f"已从 {request.url} 提取文档内容，大小: {content_length} 字节"
+            result_data["parsed_content"]["word_count"] = len(response.text.split()) if response.text else 0
+        
+        return DocParserResponse(
+            code=200,
+            message="文档解析成功",
+            data=result_data
+        )
+        
+    except Exception as e:
+        return DocParserResponse(
+            code=500,
+            message=f"文档解析失败: {str(e)}",
+            data=None
+        )
+
+@router.post("/forward/contract-view")
+async def forward_contract_view(request: Request, db: Session = Depends(get_session)):
+    """
+    新增接口：前端传数据过来，如果有 censoredSearchEngine=0 的规则，则转发给 contract_view_query
+    """
+    try:
+        data = await request.json()
+        print(f"[forward_contract_view] 收到请求: {data}")
+        # 检查 reviewRules 字段
+        review_rules = data.get("reviewRules") or data.get("review_rules")
+        if not review_rules:
+            print("[forward_contract_view] 缺少 reviewRules 字段")
+            return JSONResponse({"code": 400, "message": "缺少 reviewRules 字段"}, status_code=400)
+        # 判断是否有 censoredSearchEngine=0 的规则
+        has_censored_0 = any(
+            (rule.get("censoredSearchEngine") == 0 or rule.get("censored_search_engine") == 0)
+            for rule in review_rules
+        )
+        if has_censored_0:
+            print("[forward_contract_view] 有 censoredSearchEngine=0 的规则，转发给 contract_view_query")
+            # 直接调用 contract_view_query
+            # 构造 ContractViewRequest 对象
+            from pydantic import ValidationError
+            try:
+                req_obj = ContractViewRequest(**data)
+                print(f"[forward_contract_view] 构造 ContractViewRequest 对象成功: {req_obj}")
+            except ValidationError as ve:
+                print(f"[forward_contract_view] 参数校验失败: {ve}")
+                return JSONResponse({"code": 400, "message": f"参数校验失败: {ve}"}, status_code=400)
+            print("[forward_contract_view] 调用 contract_view_query")
+            resp = await contract_view_query(req_obj, db)
+            print(f"[forward_contract_view] contract_view_query 返回: {resp}")
+            return resp
+        else:
+            print("[forward_contract_view] 无 censoredSearchEngine=0 的规则，无需转发")
+            return JSONResponse({"code": 200, "message": "无 censoredSearchEngine=0 的规则，无需转发"})
+    except Exception as e:
+        print(f"[forward_contract_view] 服务异常: {str(e)}")
+        traceback.print_exc()
+        return JSONResponse({"code": 500, "message": f"服务异常: {str(e)}"}, status_code=500)
+
+class LogicRuleDto(BaseModel):
+    pass
+class ExampleDto(BaseModel):
+    pass
+class ConditionDto(BaseModel):
+    pass
+
+class ReviewRuleDto(BaseModel):
+    id: Optional[int]
+    ruleName: Optional[str]
+    type: Optional[int]
+    riskLevel: Optional[int]
+    riskAttributionId: Optional[int]
+    riskAttributionName: Optional[str]
+    censoredSearchEngine: Optional[int]
+    ruleGroupId: Optional[int]
+    ruleGroupName: Optional[str]
+    includeRule: Optional[str]
+    logicRuleList: Optional[List[LogicRuleDto]]
+    exampleList: Optional[List[ExampleDto]]
+    conditionalIdentifier: Optional[str]
+    conditionList: Optional[List[ConditionDto]]
+    reviseOpinion: Optional[str]
+    creatorId: Optional[int]
+    creatorName: Optional[str]
+    version: Optional[int]
+    updateTime: Optional[datetime]
+
+class JudgeResultDto(BaseModel):
+    contractId: Optional[str]
+    ruleId: Optional[int]
+    result: Optional[bool]
+
+@router.post("/review-rules/judge", response_model=List[JudgeResultDto])
+def judge_review_rules(
+    rules: List[ReviewRuleDto] = Body(..., description="审查规则列表"),
+    contract_id: Optional[str] = None
+):
+    """
+    接收规则列表，返回审查结果列表（集合）
+    """
+    results = []
+    for rule in rules:
+        # 示例逻辑：全部通过
+        results.append(JudgeResultDto(
+            contractId=contract_id or "test_contract_id",
+            ruleId=rule.id,
+            result=True
+        ))
+    return results
 
 if __name__ == "__main__":
     import sys, os

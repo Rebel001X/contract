@@ -5,6 +5,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session
 from datetime import datetime
 import pytz
+import json
 
 # 设置中国时区
 CHINA_TZ = pytz.timezone('Asia/Shanghai')
@@ -221,12 +222,12 @@ class ConfirmReviewRuleResult(Base):
     # 审查结果
     review_result = Column(String(50), nullable=False, comment='审查结果(通过/不通过)')
     risk_level = Column(String(50), nullable=False, comment='风险等级(high/medium/low/none)')
-    matched_content = Column(Text, nullable=True, comment='匹配到的合同内容片段')
-    analysis = Column(Text, nullable=True, comment='详细的分析说明')
+    matched_content = Column(Text, nullable=True, comment='匹配到的合同内容片段（存储为 JSON 字符串）')
+    analysis = Column(Text, nullable=True, comment='详细的分析说明（存储为 JSON 字符串）')
     
     # 问题和建议
-    issues = Column(JSON, nullable=True, comment='具体问题列表')
-    suggestions = Column(JSON, nullable=True, comment='具体建议列表')
+    issues = Column(Text, nullable=True, comment='具体问题列表（存储为 JSON 字符串）')
+    suggestions = Column(Text, nullable=True, comment='具体建议列表（存储为 JSON 字符串）')
     
     # 置信度
     confidence_score = Column(Integer, nullable=False, default=50, comment='置信度分数(0-100)')
@@ -241,7 +242,12 @@ class ConfirmReviewRuleResult(Base):
     contract_name = Column(String(500), nullable=True, comment='合同名称')
     risk_attribution_id = Column(Integer, nullable=True, comment='风险归属ID')
     contract_type = Column(String(50), nullable=True, comment='合同类型')
-    
+    # 新增字段：风险归属名
+    risk_attribution_name = Column(String(255), nullable=True, comment='风险归属名')
+    # 新增字段：人工修正英文
+    manual_correction_en = Column(String(500), nullable=True, comment='人工修正英文')
+    # 新增字段：错误类型
+    error_type = Column(Enum('原文定位不准','原文检索错误','审查推理错误','遗漏风险'), nullable=True, comment='错误类型')
     # 时间戳
     created_at = Column(DateTime, nullable=False, default=china_now, comment='创建时间')
 
@@ -249,6 +255,19 @@ class ConfirmReviewRuleResult(Base):
         return f"<ConfirmReviewRuleResult(id={self.id}, session_id={self.session_id}, rule_name={self.rule_name})>"
 
 # Confirm接口相关的CRUD函数
+
+def ensure_json_str(val):
+    if val is None or val == '':
+        return json.dumps([])
+    if isinstance(val, (list, dict)):
+        return json.dumps(val, ensure_ascii=False)
+    if isinstance(val, str):
+        try:
+            loaded = json.loads(val)
+            return json.dumps(loaded, ensure_ascii=False)
+        except Exception:
+            return val
+    return json.dumps([val], ensure_ascii=False)
 
 def create_confirm_review_session(db: Session, session_data: dict) -> ConfirmReviewSession:
     """创建Confirm审查会话"""
@@ -281,7 +300,15 @@ def update_confirm_review_session(db: Session, session_id: str, update_data: dic
     return session
 
 def create_confirm_review_rule_result(db: Session, result_data: dict) -> ConfirmReviewRuleResult:
-    """创建单个规则审查结果"""
+    # 保证四个字段为可解析的JSON字符串
+    for key in ["matched_content", "analysis", "issues", "suggestions"]:
+        result_data[key] = ensure_json_str(result_data.get(key))
+    
+    # 处理自定义的创建时间
+    created_at = result_data.get('created_at')
+    if created_at is None:
+        created_at = china_now()
+    
     obj = ConfirmReviewRuleResult(
         session_id=result_data.get('session_id'),
         rule_id=result_data.get('rule_id'),
@@ -301,6 +328,10 @@ def create_confirm_review_rule_result(db: Session, result_data: dict) -> Confirm
         contract_name=result_data.get('contract_name'),
         risk_attribution_id=result_data.get('risk_attribution_id'),
         contract_type=result_data.get('contract_type'),
+        risk_attribution_name=result_data.get('risk_attribution_name'),  # 新增
+        manual_correction_en=result_data.get('manual_correction_en'),  # 新增
+        error_type=result_data.get('error_type'),  # 新增
+        created_at=created_at,  # 使用自定义的创建时间
     )
     db.add(obj)
     db.commit()
@@ -335,6 +366,10 @@ def bulk_create_confirm_review_rule_results(db: Session, results_data: list) -> 
                 contract_name=result_data.get('contract_name'),
                 risk_attribution_id=result_data.get('risk_attribution_id'),
                 contract_type=result_data.get('contract_type'),
+                risk_attribution_name=result_data.get('risk_attribution_name'),  # 新增
+                manual_correction_en=result_data.get('manual_correction_en'),  # 新增
+                error_type=result_data.get('error_type'),  # 新增
+                created_at=result_data.get('created_at'), # 使用自定义的创建时间
             )
             objs.append(obj)
             db.add(obj)
