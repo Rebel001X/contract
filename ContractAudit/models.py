@@ -248,6 +248,8 @@ class ConfirmReviewRuleResult(Base):
     manual_correction_en = Column(String(500), nullable=True, comment='人工修正英文')
     # 新增字段：错误类型
     error_type = Column(Enum('原文定位不准','原文检索错误','审查推理错误','遗漏风险'), nullable=True, comment='错误类型')
+    # 新增字段：审计质量评分
+    audit_quality = Column(Integer, nullable=True, comment='审计质量评分(1-5分)')
     # 时间戳
     created_at = Column(DateTime, nullable=False, default=china_now, comment='创建时间')
 
@@ -331,6 +333,7 @@ def create_confirm_review_rule_result(db: Session, result_data: dict) -> Confirm
         risk_attribution_name=result_data.get('risk_attribution_name'),  # 新增
         manual_correction_en=result_data.get('manual_correction_en'),  # 新增
         error_type=result_data.get('error_type'),  # 新增
+        audit_quality=result_data.get('audit_quality'), # 新增
         created_at=created_at,  # 使用自定义的创建时间
     )
     db.add(obj)
@@ -369,6 +372,7 @@ def bulk_create_confirm_review_rule_results(db: Session, results_data: list) -> 
                 risk_attribution_name=result_data.get('risk_attribution_name'),  # 新增
                 manual_correction_en=result_data.get('manual_correction_en'),  # 新增
                 error_type=result_data.get('error_type'),  # 新增
+                audit_quality=result_data.get('audit_quality'), # 新增
                 created_at=result_data.get('created_at'), # 使用自定义的创建时间
             )
             objs.append(obj)

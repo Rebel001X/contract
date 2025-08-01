@@ -26,31 +26,31 @@ class Settings(BaseSettings):
     
     # 服务配置
     HOST: str = Field(default="0.0.0.0", description="服务监听地址")
-    PORT: int = Field(default=8001, description="服务监听端口")
+    PORT: int = Field(default=8010, description="服务监听端口")
     
-    # 数据库配置
-    MILVUS_HOST: str = Field(default="localhost", description="Milvus向量数据库主机")
-    MILVUS_PORT: str = Field(default="19530", description="Milvus向量数据库端口")
-    MILVUS_COLLECTION_NAME: str = Field(default="contract_vectors", description="Milvus集合名称")
-    MILVUS_VECTOR_DIM: int = Field(default=384, description="向量维度")
+    # 数据库配置（已删除 Milvus）
+    # MILVUS_HOST: str = Field(default="localhost", description="Milvus向量数据库主机")
+    # MILVUS_PORT: str = Field(default="19530", description="Milvus向量数据库端口")
+    # MILVUS_COLLECTION_NAME: str = Field(default="contract_vectors", description="Milvus集合名称")
+    # MILVUS_VECTOR_DIM: int = Field(default=384, description="向量维度")
     
-    # LLM服务配置
-    ARK_API_KEY: str = Field(default="", description="火山引擎Ark API密钥")
-    ARK_BASE_URL: str = Field(default="https://ark.cn-beijing.volces.com/api/v3", description="Ark服务基础URL")
-    ARK_TIMEOUT: int = Field(default=120, description="Ark API超时时间(秒)")
-    ARK_MAX_RETRIES: int = Field(default=3, description="Ark API最大重试次数")
+    # LLM服务配置（已删除）
+    # ARK_API_KEY: str = Field(default="", description="火山引擎Ark API密钥")
+    # ARK_BASE_URL: str = Field(default="https://ark.cn-beijing.volces.com/api/v3", description="Ark服务基础URL")
+    # ARK_TIMEOUT: int = Field(default=120, description="Ark API超时时间(秒)")
+    # ARK_MAX_RETRIES: int = Field(default=3, description="Ark API最大重试次数")
     
-    # 嵌入模型配置
-    EMBEDDING_MODEL_NAME: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2", 
-        description="嵌入模型名称"
-    )
-    EMBEDDING_DEVICE: str = Field(default="cpu", description="嵌入模型运行设备")
+    # 嵌入模型配置（已删除）
+    # EMBEDDING_MODEL_NAME: str = Field(
+    #     default="sentence-transformers/all-MiniLM-L6-v2", 
+    #     description="嵌入模型名称"
+    # )
+    # EMBEDDING_DEVICE: str = Field(default="cpu", description="嵌入模型运行设备")
     
-    # 文档处理配置
-    CHUNK_SIZE: int = Field(default=1000, description="文档分块大小")
-    CHUNK_OVERLAP: int = Field(default=200, description="文档分块重叠大小")
-    MAX_DOCUMENT_SIZE: int = Field(default=50 * 1024 * 1024, description="最大文档大小(字节)")
+    # 文档处理配置（已删除）
+    # CHUNK_SIZE: int = Field(default=1000, description="文档分块大小")
+    # CHUNK_OVERLAP: int = Field(default=200, description="文档分块重叠大小")
+    # MAX_DOCUMENT_SIZE: int = Field(default=50 * 1024 * 1024, description="最大文档大小(字节)")
     
     # 会话管理配置
     MAX_SESSIONS_PER_USER: int = Field(default=10, description="每个用户最大会话数")
@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     
     # 数据库连接URL
     DATABASE_URL: str = Field(
-        default="mysql+pymysql://root:12345@localhost:3306/mysql?charset=utf8mb4", 
+        default="mysql+pymysql://root:Kd123%40%23%24qwer@172.18.53.39:3306/smart_contract?charset=utf8mb4",
         description="SQLAlchemy数据库连接URL"
     )
     
@@ -97,6 +97,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = True
+        extra = "ignore"  # 忽略额外的字段
     
     def __init__(self, **kwargs):
         """初始化配置"""
@@ -106,8 +107,7 @@ class Settings(BaseSettings):
     
     def _validate_config(self):
         """验证配置有效性"""
-        if not self.ARK_API_KEY:
-            print("警告: ARK_API_KEY未设置，LLM功能可能不可用")
+        # 已删除 ARK_API_KEY 相关验证
         
         if not self.SECRET_KEY:
             print("警告: SECRET_KEY未设置，建议在生产环境中设置")
@@ -123,23 +123,7 @@ class Settings(BaseSettings):
         for directory in directories:
             Path(directory).mkdir(parents=True, exist_ok=True)
     
-    @property
-    def milvus_connection_args(self) -> dict:
-        """获取Milvus连接参数"""
-        return {
-            "host": self.MILVUS_HOST,
-            "port": self.MILVUS_PORT
-        }
-    
-    @property
-    def ark_client_config(self) -> dict:
-        """获取Ark客户端配置"""
-        return {
-            "api_key": self.ARK_API_KEY,
-            "base_url": self.ARK_BASE_URL,
-            "timeout": self.ARK_TIMEOUT,
-            "max_retries": self.ARK_MAX_RETRIES
-        }
+    # 已删除 milvus_connection_args 和 ark_client_config 方法
 
 
 # 全局配置实例
@@ -164,7 +148,7 @@ ENVIRONMENT=production
 
 # 服务配置
 HOST=0.0.0.0
-PORT=8001
+PORT=8010
 
 # 数据库配置
 MILVUS_HOST=localhost
@@ -235,4 +219,4 @@ def get_session():
     try:
         yield db
     finally:
-        db.close() 
+        db.close()

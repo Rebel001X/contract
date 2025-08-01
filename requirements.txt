@@ -7,33 +7,6 @@ uvicorn[standard]==0.24.0
 pydantic~=2.11.7
 pydantic-settings==2.1.0
 
-# LangChain相关
-# langchain~=0.3.26
-# langchain-core~=0.3.66
-# langchain-community~=0.3.26
-# langchain-text-splitters==0.0.1
-
-# 向量数据库
-# pymilvus==2.3.4
-
-# 嵌入模型
-# sentence-transformers==2.2.2
-# transformers==4.36.0
-# torch>=2.0.0
-
-# 文档处理
-# python-docx==1.1.0
-# docx2txt==0.8
-# PyPDF2==3.0.1
-# python-multipart==0.0.6
-
-# 火山引擎Ark LLM (可选，如果不可用则跳过)
-# volcenginesdkarkruntime==1.0.0
-
-# 数据处理
-# numpy==1.24.3
-# pandas==2.1.4
-
 # 日志和监控
 loguru~=0.7.3
 prometheus-client==0.19.0
@@ -65,6 +38,4 @@ rich==13.7.0
 SQLAlchemy~=2.0.41
 requests~=2.32.4
 pytz==2023.3
-
-# 新增依赖
-# llama-index
+pymysql==1.1.1

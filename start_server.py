@@ -10,7 +10,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "ContractAudit.main:app",
         host="0.0.0.0",
-        port=8001,
+        port=8010,
         reload=False,  # 关闭reload避免问题
         log_level="info"
     ) 

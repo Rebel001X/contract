@@ -74,12 +74,12 @@ clean:
 # 启动开发服务器
 run:
 	@echo "启动开发服务器..."
-	uvicorn ContractAudit.main:app --host 0.0.0.0 --port 8001 --reload
+	uvicorn ContractAudit.main:app --host 0.0.0.0 --port 8010 --reload
 
 # 启动生产服务器
 run-prod:
 	@echo "启动生产服务器..."
-	uvicorn ContractAudit.main:app --host 0.0.0.0 --port 8001 --workers 4
+	uvicorn ContractAudit.main:app --host 0.0.0.0 --port 8010 --workers 4
 
 # 构建Docker镜像
 docker-build:

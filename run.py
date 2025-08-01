@@ -24,7 +24,7 @@ def main():
         uvicorn.run(
             "ContractAudit.main:app",  # 使用模块导入字符串
             host="0.0.0.0",
-            port=8001,
+            port=8010,
             reload=True,  # 开发模式，自动重载
             log_level="info"
         )

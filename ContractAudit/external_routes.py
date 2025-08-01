@@ -822,6 +822,9 @@ class ConfirmReviewRuleResultOut(BaseModel):
     risk_attribution_id: Optional[int] = None  # 风险归属ID
     contract_type: Optional[str] = None  # 合同类型
     risk_attribution_name: Optional[str] = None  # 新增：风险归属名
+    manual_correction_en: Optional[str] = None  # 新增：人工修正英文
+    error_type: Optional[str] = None  # 新增：错误类型
+    audit_quality: Optional[int] = None  # 新增：审计质量评分
     created_at: Optional[datetime] = None
 
     @validator('issues', 'suggestions', 'analysis', 'matched_content', pre=True)
@@ -870,6 +873,9 @@ class ConfirmReviewRuleResultOut(BaseModel):
             'riskAttributionId': getattr(obj, 'risk_attribution_id', None),
             'riskAttributionName': getattr(obj, 'risk_attribution_name', None),
             'contract_type': getattr(obj, 'contract_type', None),
+            'manual_correction_en': getattr(obj, 'manual_correction_en', None),  # 新增
+            'error_type': getattr(obj, 'error_type', None),  # 新增
+            'audit_quality': getattr(obj, 'audit_quality', None),  # 新增
             'created_at': obj.created_at.isoformat() if obj.created_at else None
         }
         return cls(**data)
@@ -1036,6 +1042,7 @@ class UserFeedbackRequest(BaseModel):
     contract_id: Optional[str] = Field(None, description="合同ID")
     manual_correction_en: Optional[str] = Field(None, description="人工修正英文")  # 新增
     error_type: Optional[str] = Field(None, description="错误类型")  # 新增
+    audit_quality: Optional[int] = Field(None, ge=1, le=5, description="审计质量评分(1-5分)")  # 新增
 
 @unified_response
 @router.post("/confirm-review-rule-result/feedback")
@@ -1076,6 +1083,11 @@ def update_user_feedback_by_rule_id(request: UserFeedbackRequest = Body(...), db
     if error_type is not None:
         obj.error_type = error_type
     
+    # 更新审计质量评分（如果提供）
+    audit_quality = getattr(request, 'audit_quality', None)
+    if audit_quality is not None:
+        obj.audit_quality = audit_quality
+    
     db.commit()
     db.refresh(obj)
     
@@ -1088,6 +1100,7 @@ def update_user_feedback_by_rule_id(request: UserFeedbackRequest = Body(...), db
         "is_approved": obj.is_approved,
         "manual_correction_en": obj.manual_correction_en,  # 新增
         "error_type": obj.error_type,  # 新增
+        "audit_quality": obj.audit_quality,  # 新增
         "rule_id": rule_id,
         "id": obj.id
     }
