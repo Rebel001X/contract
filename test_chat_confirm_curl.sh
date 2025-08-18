@@ -76,7 +76,31 @@ curl -X POST "http://localhost:8001/chat/confirm" \
         elif [[ "$event_type" == "error" ]]; then
           echo "  ❌ 错误:"
           error_msg=$(echo "$json_data" | jq -r '.data.error // "未知错误"' 2>/dev/null)
-          echo "    $error_msg"
+          error_type=$(echo "$json_data" | jq -r '.data.error_type // "未知类型"' 2>/dev/null)
+          error_code=$(echo "$json_data" | jq -r '.data.error_code // "未知代码"' 2>/dev/null)
+          echo "    错误信息: $error_msg"
+          echo "    错误类型: $error_type"
+          echo "    错误代码: $error_code"
+          
+          # 检查是否有 rule_confirm_info
+          rule_confirm_info=$(echo "$json_data" | jq -r '.data.rule_confirm_info // null' 2>/dev/null)
+          if [[ "$rule_confirm_info" != "null" ]]; then
+            echo "    📋 rule/confirm 信息:"
+            contract_id=$(echo "$json_data" | jq -r '.data.rule_confirm_info.contract_id // "N/A"' 2>/dev/null)
+            censored_rules_count=$(echo "$json_data" | jq -r '.data.rule_confirm_info.censored_rules_count // "N/A"' 2>/dev/null)
+            echo "      合同ID: $contract_id"
+            echo "      受影响规则数: $censored_rules_count"
+            
+            # 检查是否有规则ID信息
+            rule_id=$(echo "$json_data" | jq -r '.data.rule_confirm_info.rule_id // null' 2>/dev/null)
+            if [[ "$rule_id" != "null" ]]; then
+              fallback_reason=$(echo "$json_data" | jq -r '.data.rule_confirm_info.fallback_reason // "N/A"' 2>/dev/null)
+              fallback_result=$(echo "$json_data" | jq -r '.data.rule_confirm_info.fallback_result // "N/A"' 2>/dev/null)
+              echo "      规则ID: $rule_id"
+              echo "      兜底原因: $fallback_reason"
+              echo "      兜底结果: $fallback_result"
+            fi
+          fi
         fi
       else
         echo "  原始数据: $json_data"

@@ -88,10 +88,35 @@ ContractAudit 系统的流式输出功能已经升级，现在支持结构化的
   "timestamp": 1703123461.012,
   "data": {
     "error": "错误信息",
-    "status": "failed"
+    "error_type": "错误类型",
+    "error_code": "错误代码",
+    "status": "failed",
+    "timestamp": 1703123461.012,
+    "rule_confirm_info": {
+      "url": "rule/confirm接口URL",
+      "contract_id": "合同ID",
+      "censored_rules_count": 2,
+      "censored_rule_ids": [6, 8],
+      "rule_id": "规则ID（兜底处理时）",
+      "fallback_reason": "兜底处理原因（兜底处理时）",
+      "fallback_result": "兜底处理结果（兜底处理时）",
+      "response_status": 200,
+      "response_length": 1234,
+      "business_error_code": 14000000,
+      "business_error_message": "业务错误信息",
+      "unknown_error_code": 99999999,
+      "response_message": "响应消息",
+      "response_type": "响应类型",
+      "response_value": "响应值"
+    }
   }
 }
 ```
+
+**错误类型说明：**
+- `error_type`: 错误类型分类（如：请求超时、网络连接失败、JSON解析失败、业务逻辑失败等）
+- `error_code`: 错误代码标识（如：RULE_CONFIRM_TIMEOUT、RULE_CONFIRM_CONNECTION_FAILED等）
+- `rule_confirm_info`: rule/confirm相关的详细信息（仅在rule/confirm相关错误时包含）
 
 ## 使用方法
 

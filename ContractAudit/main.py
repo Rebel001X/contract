@@ -24,6 +24,101 @@ def log_debug(msg):
         print(f"[LOG_DEBUG] 写入日志文件失败: {e}")
 
 import re
+import functools
+from typing import Dict, Any, Optional, Union
+from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse
+
+# 统一的异常处理类
+class ContractAuditException(Exception):
+    """合同审计系统自定义异常基类"""
+    def __init__(self, message: str, code: int = 500, error_type: str = "INTERNAL_ERROR", details: Optional[Dict] = None):
+        self.message = message
+        self.code = code
+        self.error_type = error_type
+        self.details = details or {}
+        super().__init__(self.message)
+
+class RuleConfirmException(ContractAuditException):
+    """rule/confirm 接口异常"""
+    def __init__(self, message: str, original_error: Optional[Exception] = None, details: Optional[Dict] = None):
+        super().__init__(
+            message=message,
+            code=500,
+            error_type="RULE_CONFIRM_ERROR",
+            details={
+                "original_error": str(original_error) if original_error else None,
+                "error_type": type(original_error).__name__ if original_error else None,
+                **(details or {})
+            }
+        )
+
+class ValidationException(ContractAuditException):
+    """数据验证异常"""
+    def __init__(self, message: str, field: Optional[str] = None):
+        super().__init__(
+            message=message,
+            code=400,
+            error_type="VALIDATION_ERROR",
+            details={"field": field}
+        )
+
+class ExternalServiceException(ContractAuditException):
+    """外部服务调用异常"""
+    def __init__(self, service_name: str, message: str, original_error: Optional[Exception] = None):
+        super().__init__(
+            message=f"{service_name} 服务调用失败: {message}",
+            code=503,
+            error_type="EXTERNAL_SERVICE_ERROR",
+            details={
+                "service_name": service_name,
+                "original_error": str(original_error) if original_error else None,
+                "error_type": type(original_error).__name__ if original_error else None
+            }
+        )
+
+def standard_exception_handler(func):
+    """标准异常处理装饰器"""
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except ContractAuditException as e:
+            # 处理自定义异常
+            error_response = {
+                "code": e.code,
+                "message": e.message,
+                "error_type": e.error_type,
+                "details": e.details,
+                "success": False
+            }
+            return JSONResponse(content=error_response, status_code=e.code)
+        except Exception as e:
+            # 处理其他未预期的异常
+            error_response = {
+                "code": 500,
+                "message": f"系统内部错误: {str(e)}",
+                "error_type": "INTERNAL_ERROR",
+                "details": {
+                    "error_type": type(e).__name__,
+                    "error_message": str(e)
+                },
+                "success": False
+            }
+            return JSONResponse(content=error_response, status_code=500)
+    return wrapper
+
+def create_error_response(code: int, message: str, error_type: str = "ERROR", details: Optional[Dict] = None) -> Dict[str, Any]:
+    """创建标准错误响应格式"""
+    return {
+        "code": code,
+        "message": message,
+        "error_type": error_type,
+        "details": details or {},
+        "success": False
+    }
+
+import re
 
 def camel_to_snake(name):
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
@@ -295,6 +390,63 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 全局异常处理器
+@app.exception_handler(ContractAuditException)
+async def contract_audit_exception_handler(request: Request, exc: ContractAuditException):
+    """处理合同审计系统自定义异常"""
+    print(f"===============================================================================")
+    print(f"[EXCEPTION_HANDLER] 🚨 捕获到 ContractAuditException!")
+    print(f"[EXCEPTION_HANDLER] ⏰ 时间戳: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[EXCEPTION_HANDLER] 🌐 请求路径: {request.url.path}")
+    print(f"[EXCEPTION_HANDLER] 📝 错误类型: {exc.error_type}")
+    print(f"[EXCEPTION_HANDLER] 💬 错误消息: {exc.message}")
+    print(f"[EXCEPTION_HANDLER] 🔢 状态码: {exc.code}")
+    print(f"[EXCEPTION_HANDLER] 📋 详细信息: {exc.details}")
+    log_debug(f"[EXCEPTION_HANDLER] 捕获到 ContractAuditException: type={exc.error_type}, message={exc.message}, code={exc.code}, details={exc.details}")
+    
+    # 构建标准 JSON 响应
+    response_content = {
+        "code": exc.code,
+        "message": exc.message,
+        "error_type": exc.error_type,
+        "details": exc.details,
+        "success": False
+    }
+    
+    print(f"[EXCEPTION_HANDLER] 📤 准备返回标准 JSON 响应:")
+    print(f"[EXCEPTION_HANDLER] 📦 响应内容: {response_content}")
+    print(f"[EXCEPTION_HANDLER] ✅ 返回 HTTP 状态码: 200 (业务错误码: {exc.code})")
+    log_debug(f"[EXCEPTION_HANDLER] 返回标准 JSON 响应: {response_content}")
+    print(f"===============================================================================")
+    
+    return JSONResponse(
+        status_code=200,  # 返回200状态码，让前端能正常解析JSON
+        content=response_content
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """处理所有未捕获的异常"""
+    print(f"[EXCEPTION_HANDLER] 捕获到未处理异常:")
+    print(f"  - 异常类型: {type(exc).__name__}")
+    print(f"  - 异常消息: {str(exc)}")
+    print(f"  - 请求路径: {request.url.path}")
+    log_debug(f"[EXCEPTION_HANDLER] 捕获到未处理异常: type={type(exc).__name__}, message={str(exc)}, path={request.url.path}")
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "code": 500,
+            "message": f"系统内部错误: {str(exc)}",
+            "error_type": "INTERNAL_ERROR",
+            "details": {
+                "error_type": type(exc).__name__,
+                "error_message": str(exc)
+            },
+            "success": False
+        }
+    )
 
 # 包含外部路由
 app.include_router(external_router, prefix="/api", tags=["external"])
@@ -666,24 +818,45 @@ async def stream_test_simple():
 
 @app.post("/chat/confirm")
 async def chat_confirm(request: Request):
-    log_debug("收到confirm请求")
-    print("收到confirm请求")
+    import time
     import json
+    
+    print(f"===============================================================================")
+    print(f"[CHAT_CONFIRM] 🚀 收到 /chat/confirm 请求")
+    print(f"[CHAT_CONFIRM] ⏰ 请求时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[CHAT_CONFIRM] 🌐 请求路径: {request.url.path}")
+    print(f"[CHAT_CONFIRM] 📡 客户端地址: {request.client.host if request.client else 'Unknown'}")
+    log_debug(f"[CHAT_CONFIRM] 收到 /chat/confirm 请求，时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     data = await request.json()
     session_id = data.get("session_id")
     message = data.get("message")
     auto_save = data.get("auto_save", False)
     user_id = data.get("user_id")
     project_name = data.get("project_name")
+    
+    print(f"[CHAT_CONFIRM] 📋 请求参数:")
+    print(f"[CHAT_CONFIRM]   - session_id: {session_id}")
+    print(f"[CHAT_CONFIRM]   - auto_save: {auto_save}")
+    print(f"[CHAT_CONFIRM]   - user_id: {user_id}")
+    print(f"[CHAT_CONFIRM]   - project_name: {project_name}")
+    print(f"[CHAT_CONFIRM]   - message 长度: {len(message) if message else 0} 字符")
+    log_debug(f"[CHAT_CONFIRM] 请求参数: session_id={session_id}, auto_save={auto_save}, user_id={user_id}")
+    print(f"===============================================================================")
+
+    # 初始化 rule_engine_result 变量（在 chat_confirm 函数作用域）
+    rule_engine_result = None
+    
+    # 提前定义 rule/confirm 相关变量
+    rule_engine_url = "http://172.18.53.39:8080/agent/python/rule/confirm"
 
     if not session_id or not message:
-        raise HTTPException(status_code=400, detail="session_id 和 message 必填")
+        raise ValidationException("session_id 和 message 必填")
 
     # 解析 message 字段
     try:
         message_data = dict_keys_to_snake(json.loads(message))
-    except (json.JSONDecodeError, TypeError):
-        return JSONResponse({"code": 400, "message": "message 字段不是合法 JSON"}, status_code=400)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise ValidationException("message 字段不是合法 JSON", field="message")
 
     # 深度去除 logicRuleList 字段（兼容嵌套和不同命名风格）
     def remove_logic_rule_list(obj):
@@ -699,6 +872,102 @@ async def chat_confirm(request: Request):
     import asyncio
     import time
     from datetime import datetime, timedelta
+    
+    # 提前过滤规则：分离 censoredSearchEngine=1 的规则用于 rule/confirm
+    def find_censored_search_engine(obj, path=""):
+        """递归查找 censoredSearchEngine 字段"""
+        if isinstance(obj, dict):
+            # 检查当前层级是否有 censoredSearchEngine 字段
+            censored_search_engine = obj.get('censoredSearchEngine')
+            if censored_search_engine is None:
+                censored_search_engine = obj.get('censored_search_engine')
+            if censored_search_engine is not None:
+                return censored_search_engine, path
+            
+            # 递归查找子对象
+            for key, value in obj.items():
+                result, new_path = find_censored_search_engine(value, f"{path}.{key}" if path else key)
+                if result is not None:
+                    return result, new_path
+                    
+        elif isinstance(obj, list):
+            # 递归查找列表中的每个元素
+            for i, item in enumerate(obj):
+                result, new_path = find_censored_search_engine(item, f"{path}[{i}]" if path else f"[{i}]")
+                if result is not None:
+                    return result, new_path
+        
+        return None, path
+    
+    # 过滤规则：只保留 censoredSearchEngine=0 的规则给 contract/view
+    frontend_rules = message_data.get('reviewRules') or message_data.get('review_rules') or []
+    filtered_rules = []
+    censored_rules = []  # 用于后续 rule/confirm 处理
+    
+    print(f"[DEBUG] 开始过滤规则，前端规则数量: {len(frontend_rules)}")
+    log_debug(f"[DEBUG] 开始过滤规则，前端规则数量: {len(frontend_rules)}")
+    
+    for rule in frontend_rules:
+        # 递归查找 censoredSearchEngine 字段
+        censored_search_engine, found_path = find_censored_search_engine(rule)
+        rule_id = rule.get('ruleId') or rule.get('id') or 'unknown'
+        
+        print(f"[DEBUG] 规则 {rule_id} 的 censoredSearchEngine: {censored_search_engine} (路径: {found_path})")
+        log_debug(f"[DEBUG] 规则 {rule_id} 的 censoredSearchEngine: {censored_search_engine} (路径: {found_path})")
+        
+        if censored_search_engine == 1:
+            # censoredSearchEngine=1 的规则不传给 contract/view，只用于 rule/confirm
+            censored_rules.append(rule)
+            print(f"[DEBUG] 规则 {rule_id} censoredSearchEngine=1，跳过 contract/view，加入 rule/confirm 列表")
+            log_debug(f"[DEBUG] 规则 {rule_id} censoredSearchEngine=1，跳过 contract/view，加入 rule/confirm 列表")
+        else:
+            # censoredSearchEngine=0 或未设置的规则传给 contract/view
+            filtered_rules.append(rule)
+            print(f"[DEBUG] 规则 {rule_id} censoredSearchEngine={censored_search_engine}，加入 contract/view 列表")
+            log_debug(f"[DEBUG] 规则 {rule_id} censoredSearchEngine={censored_search_engine}，加入 contract/view 列表")
+    
+    print(f"[DEBUG] 过滤结果: contract/view 规则数量={len(filtered_rules)}, rule/confirm 规则数量={len(censored_rules)}")
+    log_debug(f"[DEBUG] 过滤结果: contract/view 规则数量={len(filtered_rules)}, rule/confirm 规则数量={len(censored_rules)}")
+    
+    # 提前定义 contract_id 相关变量
+    contract_id = (
+        message_data.get("contractId") or 
+        message_data.get("contract_id") or 
+        "1234"  # 默认值
+    )
+    
+    # 检查是否需要调用 rule/confirm 接口
+    need_rule_confirm = len(censored_rules) > 0
+    
+    # 调试 contract_id 获取过程
+    print(f"[DEBUG] contract_id 获取详情:")
+    print(f"  - message_data.get('contractId'): {message_data.get('contractId')}")
+    print(f"  - message_data.get('contract_id'): {message_data.get('contract_id')}")
+    print(f"  - 最终 contract_id: {contract_id}")
+    print(f"[DEBUG] rule/confirm 调用条件检查:")
+    print(f"  - contract_id: {contract_id}")
+    print(f"  - need_rule_confirm: {need_rule_confirm}")
+    print(f"  - censored_rules 数量: {len(censored_rules)}")
+    log_debug(f"[DEBUG] contract_id={contract_id}, need_rule_confirm={need_rule_confirm}, censored_rules_count={len(censored_rules)}")
+    
+    # 定义 validate_and_convert_condition_info 函数
+    def validate_and_convert_condition_info(condition_list):
+        """确保 conditionInfo 字段是字符串格式"""
+        if not isinstance(condition_list, list):
+            return condition_list
+        
+        processed_list = []
+        for condition in condition_list:
+            if isinstance(condition, dict) and 'conditionInfo' in condition:
+                # 如果 conditionInfo 不是字符串，进行转换
+                if not isinstance(condition['conditionInfo'], str):
+                    try:
+                        condition['conditionInfo'] = json.dumps(condition['conditionInfo'], ensure_ascii=False)
+                    except:
+                        condition['conditionInfo'] = str(condition['conditionInfo'])
+            processed_list.append(condition)
+        return processed_list
+    
     import pytz
 
     # 获取上一个时间戳的时间（当前时间减去1秒）
@@ -728,6 +997,9 @@ async def chat_confirm(request: Request):
             return data
 
     async def event_stream():
+        # 声明 nonlocal 变量，允许修改外层作用域的变量
+        nonlocal rule_engine_result
+        
         # 递归 riskLevel 转数字
         def risk_level_to_number(risk):
             if isinstance(risk, int):
@@ -802,61 +1074,9 @@ async def chat_confirm(request: Request):
             "contractId": "1234",
         }
         
-        # 新增：递归查找 censoredSearchEngine 字段的函数
-        def find_censored_search_engine(obj, path=""):
-            """递归查找 censoredSearchEngine 字段"""
-            if isinstance(obj, dict):
-                # 检查当前层级是否有 censoredSearchEngine 字段
-                censored_search_engine = obj.get('censoredSearchEngine')
-                if censored_search_engine is None:
-                    censored_search_engine = obj.get('censored_search_engine')
-                if censored_search_engine is not None:
-                    return censored_search_engine, path
-                
-                # 递归查找子对象
-                for key, value in obj.items():
-                    result, new_path = find_censored_search_engine(value, f"{path}.{key}" if path else key)
-                    if result is not None:
-                        return result, new_path
-                        
-            elif isinstance(obj, list):
-                # 递归查找列表中的每个元素
-                for i, item in enumerate(obj):
-                    result, new_path = find_censored_search_engine(item, f"{path}[{i}]" if path else f"[{i}]")
-                    if result is not None:
-                        return result, new_path
-            
-            return None, path
+        # find_censored_search_engine 函数已移至 chat_confirm 函数外层
         
-        # 过滤规则：只保留 censoredSearchEngine=0 的规则给 contract/view
-        frontend_rules = message_data.get('reviewRules') or message_data.get('review_rules') or []
-        filtered_rules = []
-        censored_rules = []  # 用于后续 rule/confirm 处理
-        
-        print(f"[DEBUG] 开始过滤规则，前端规则数量: {len(frontend_rules)}")
-        log_debug(f"[DEBUG] 开始过滤规则，前端规则数量: {len(frontend_rules)}")
-        
-        for rule in frontend_rules:
-            # 递归查找 censoredSearchEngine 字段
-            censored_search_engine, found_path = find_censored_search_engine(rule)
-            rule_id = rule.get('ruleId') or rule.get('id') or 'unknown'
-            
-            print(f"[DEBUG] 规则 {rule_id} 的 censoredSearchEngine: {censored_search_engine} (路径: {found_path})")
-            log_debug(f"[DEBUG] 规则 {rule_id} 的 censoredSearchEngine: {censored_search_engine} (路径: {found_path})")
-            
-            if censored_search_engine == 1:
-                # censoredSearchEngine=1 的规则不传给 contract/view，只用于 rule/confirm
-                censored_rules.append(rule)
-                print(f"[DEBUG] 规则 {rule_id} censoredSearchEngine=1，跳过 contract/view，加入 rule/confirm 列表")
-                log_debug(f"[DEBUG] 规则 {rule_id} censoredSearchEngine=1，跳过 contract/view，加入 rule/confirm 列表")
-            else:
-                # censoredSearchEngine=0 或未设置的规则传给 contract/view
-                filtered_rules.append(rule)
-                print(f"[DEBUG] 规则 {rule_id} censoredSearchEngine={censored_search_engine}，加入 contract/view 列表")
-                log_debug(f"[DEBUG] 规则 {rule_id} censoredSearchEngine={censored_search_engine}，加入 contract/view 列表")
-        
-        print(f"[DEBUG] 过滤结果: contract/view 规则数量={len(filtered_rules)}, rule/confirm 规则数量={len(censored_rules)}")
-        log_debug(f"[DEBUG] 过滤结果: contract/view 规则数量={len(filtered_rules)}, rule/confirm 规则数量={len(censored_rules)}")
+        # 规则过滤逻辑已移至 chat_confirm 函数外层
         
         contract_view_fields = list(default_contract_view_fields.keys())
         contract_view_payload = default_contract_view_fields.copy()
@@ -1111,178 +1331,9 @@ async def chat_confirm(request: Request):
 
         contract_view_result_for_save = convert_numbered_dict_to_structured_result(contract_view_result)
 
-        # 恢复 rule_engine_result 相关逻辑
-        rule_engine_url = "http://172.18.53.39:8080/agent/python/rule/confirm"
-        
-        # 修复 contract_id 获取逻辑 - 优先从 message_data 获取
-        contract_id = (
-            message_data.get("contractId") or 
-            message_data.get("contract_id") or 
-            "1234"  # 默认值，避免从 contract_view_result 获取失败
-        )
-        
-        # 调试 contract_id 获取过程
-        print(f"[DEBUG] contract_id 获取详情:")
-        print(f"  - message_data.get('contractId'): {message_data.get('contractId')}")
-        print(f"  - message_data.get('contract_id'): {message_data.get('contract_id')}")
-        print(f"  - 最终 contract_id: {contract_id}")
-        log_debug(f"[DEBUG] contract_id 获取详情: message_data.contractId={message_data.get('contractId')}, message_data.contract_id={message_data.get('contract_id')}, final_contract_id={contract_id}")
-        rule_engine_result = None
-        
-        # 检查是否需要调用 rule/confirm 接口
-        need_rule_confirm = len(censored_rules) > 0  # 直接使用之前过滤的 censored_rules
-        
-        # 详细检查调用条件
-        print(f"[DEBUG] rule/confirm 调用条件检查:")
-        print(f"  - contract_id: {contract_id}")
-        print(f"  - need_rule_confirm: {need_rule_confirm}")
-        print(f"  - censored_rules 数量: {len(censored_rules)}")
-        print(f"  - rule_engine_result 类型: {type(rule_engine_result)}")
-        print(f"  - rule_engine_result 值: {rule_engine_result}")
-        log_debug(f"[DEBUG] rule/confirm 调用条件检查: contract_id={contract_id}, need_rule_confirm={need_rule_confirm}, censored_rules_count={len(censored_rules)}, rule_engine_result_type={type(rule_engine_result)}, rule_engine_result_value={rule_engine_result}")
-        
-        # 强制调用选项（用于测试）
-        force_rule_confirm = message_data.get('force_rule_confirm', False)
-        if force_rule_confirm:
-            need_rule_confirm = True
-            print(f"[DEBUG] 强制调用 rule/confirm 接口")
-            log_debug(f"[DEBUG] 强制调用 rule/confirm 接口")
-        
-        if contract_id and need_rule_confirm:
-            # 构建标准格式的 rule/confirm 请求体
-            review_rule_dto_list = []
-            # 使用前端传入的规则，而不是 contract_view 返回的规则
-            for rule in censored_rules:
-                rule_id = rule.get('ruleId') or rule.get('id') or rule.get('rule_id')
-                if rule_id:
-                    # 构建标准格式的规则DTO，直接使用前端规则数据
-                    rule_dto = {
-                        "id": int(rule_id) if isinstance(rule_id, (int, str)) else rule_id,
-                        "ruleName": rule.get('ruleName') or rule.get('rule_name') or f"规则{rule_id}",
-                        "type": rule.get('type', 0),
-                        "riskLevel": rule.get('riskLevel') or rule.get('risk_level', 1),
-                        "riskAttributionId": rule.get('riskAttributionId') or rule.get('risk_attribution_id', 1),
-                        "riskAttributionName": rule.get('riskAttributionName') or rule.get('risk_attribution_name', "默认风险归属"),
-                        "censoredSearchEngine": rule.get('censoredSearchEngine') or rule.get('censored_search_engine', 0),
-                        "ruleGroupId": rule.get('ruleGroupId') or rule.get('rule_group_id', 1),
-                        "ruleGroupName": rule.get('ruleGroupName') or rule.get('rule_group_name', "默认分组"),
-                        "includeRule": rule.get('includeRule') or rule.get('include_rule'),
-                        "logicRuleList": rule.get('logicRuleList') or rule.get('logic_rule_list'),
-                        "exampleList": rule.get('exampleList') or rule.get('example_list'),
-                        "conditionalIdentifier": rule.get('conditionalIdentifier') or rule.get('conditional_identifier', "anyone"),
-                        "conditionList": rule.get('conditionList') or rule.get('condition_list', []),
-                        "reviseOpinion": rule.get('reviseOpinion') or rule.get('revise_opinion', ""),
-                        "creatorId": rule.get('creatorId') or rule.get('creator_id', 0),
-                        "creatorName": rule.get('creatorName') or rule.get('creator_name', "admin"),
-                        "version": rule.get('version', 0),
-                        "updateTime": rule.get('updateTime') or rule.get('update_time', "2025-01-01 00:00:00"),
-                        "result": True  # 默认通过，因为这是前端传入的原始规则
-                    }
-                    review_rule_dto_list.append(rule_dto)
-                    
-                    # 调试日志
-                    print(f"[DEBUG] 添加规则到 rule/confirm 请求: {rule_id}")
-                    log_debug(f"[DEBUG] 添加规则到 rule/confirm 请求: {rule_id}")
-            
-            # 构建标准格式的请求体
-            rule_engine_payload = {
-                "contractId": contract_id,
-                "reviewRuleDtoList": review_rule_dto_list
-            }
-            
-            # 详细打印标准格式请求
-            print("=" * 80)
-            print("🚀 RULE/CONFIRM API 标准格式请求详情")
-            print("=" * 80)
-            print(f"📡 URL: {rule_engine_url}")
-            print(f"📋 请求方法: POST")
-            print(f"⏱️  超时时间: 30秒")
-            print("-" * 80)
-            print("📦 标准格式请求体 (JSON):")
-            print(json.dumps(rule_engine_payload, indent=2, ensure_ascii=False))
-            print("-" * 80)
-            print(f"📊 请求体大小: {len(json.dumps(rule_engine_payload, ensure_ascii=False))} 字符")
-            print(f"🔢 reviewRuleDtoList 数量: {len(review_rule_dto_list)}")
-            print(f"🆔 contractId: {contract_id}")
-            print("=" * 80)
-            
-            print(f"[LOG] rule/confirm 请求: url={rule_engine_url}, payload={rule_engine_payload}")
-            log_debug(f"[LOG] rule/confirm 请求: url={rule_engine_url}, payload={rule_engine_payload}")
-            try:
-                async with httpx.AsyncClient() as client:
-                    rule_engine_resp = await asyncio.wait_for(client.post(rule_engine_url, json=rule_engine_payload, timeout=30), timeout=60)
-                    rule_engine_resp_text = await rule_engine_resp.aread()
-                    print(f"[LOG] rule/confirm 响应: status={rule_engine_resp.status_code}, text={rule_engine_resp_text}")
-                    log_debug(f"[LOG] rule/confirm 响应: status={rule_engine_resp.status_code}, text={rule_engine_resp_text}")
-                    
-                    # 安全解析 JSON 响应
-                    try:
-                        rule_engine_result = rule_engine_resp.json()
-                        # 检查返回类型，如果不是字典则转换为字典
-                        if not isinstance(rule_engine_result, dict):
-                            print(f"[WARN] rule/confirm 响应不是字典类型: {type(rule_engine_result)}, 值: {rule_engine_result}")
-                            log_debug(f"[WARN] rule/confirm 响应不是字典类型: {type(rule_engine_result)}, 值: {rule_engine_result}")
-                            # 如果是布尔值，转换为字典格式
-                            if isinstance(rule_engine_result, bool):
-                                rule_engine_result = {"success": rule_engine_result, "message": "Boolean response converted to dict"}
-                            else:
-                                rule_engine_result = {"data": rule_engine_result, "message": "Non-dict response converted to dict"}
-                    except Exception as json_error:
-                        print(f"[ERROR] 解析 rule/confirm JSON 响应失败: {json_error}")
-                        log_debug(f"[ERROR] 解析 rule/confirm JSON 响应失败: {json_error}")
-                        rule_engine_result = {"error": f"JSON parsing failed: {str(json_error)}"}
-                    
-                    # 详细打印标准格式响应
-                    print("=" * 80)
-                    print("📥 RULE/CONFIRM API 标准格式响应详情")
-                    print("=" * 80)
-                    if rule_engine_result:
-                        if "error" in rule_engine_result:
-                            print(f"❌ 响应状态: 错误")
-                            print(f"🚨 错误信息: {rule_engine_result['error']}")
-                        else:
-                            print(f"✅ 响应状态: 成功")
-                            print(f"📊 响应体大小: {len(json.dumps(rule_engine_result, ensure_ascii=False))} 字符")
-                            print(f"🔢 响应体键数量: {len(rule_engine_result.keys())}")
-                            print(f"📋 响应体键列表: {list(rule_engine_result.keys())}")
-                            
-                            # 新增：详细分析 Java BaseResponse 格式
-                            error_code = rule_engine_result.get('code') or rule_engine_result.get('errorCode')
-                            if error_code is not None:
-                                print(f"🔍 Java BaseResponse 格式分析:")
-                                print(f"  - 错误码 (code): {error_code}")
-                                print(f"  - 消息 (message): {rule_engine_result.get('message', 'N/A')}")
-                                print(f"  - 数据 (data): {rule_engine_result.get('data', 'N/A')}")
-                                
-                                if error_code == 14000000:
-                                    print(f"  - 状态: 失败 (规则引擎执行失败)")
-                                elif error_code == 20000000:
-                                    print(f"  - 状态: 成功")
-                                    data = rule_engine_result.get('data')
-                                    if isinstance(data, dict):
-                                        print(f"  - JudgeResultDto 分析:")
-                                        print(f"    * contractId: {data.get('contractId', 'N/A')}")
-                                        print(f"    * ruleId: {data.get('ruleId', 'N/A')}")
-                                        print(f"    * result: {data.get('result', 'N/A')}")
-                                else:
-                                    print(f"  - 状态: 未知错误码")
-                            
-                            print("-" * 80)
-                            print("📦 响应体 (JSON):")
-                            print(json.dumps(rule_engine_result, indent=2, ensure_ascii=False))
-                    else:
-                        print("❌ 响应状态: 无响应")
-                    print("=" * 80)
-            except Exception as e:
-                print(f"[rule/confirm调用失败] url={rule_engine_url} payload={rule_engine_payload} error={e}")
-                log_debug(f"[rule/confirm调用失败] url={rule_engine_url} payload={rule_engine_payload} error={e}")
-                rule_engine_result = {"error": f"rule/confirm failed: {str(e)}"}
-        elif need_rule_confirm:
-            print(f"[WARN] 需要调用 rule/confirm 但缺少必要参数: contract_id={contract_id}, rules_count={len(rules) if rules else 0}")
-            log_debug(f"[WARN] 需要调用 rule/confirm 但缺少必要参数: contract_id={contract_id}, rules_count={len(rules) if rules else 0}")
-        else:
-            print(f"[INFO] 无需调用 rule/confirm: need_rule_confirm={need_rule_confirm}, censored_rules_count={len(censored_rules)}")
-            log_debug(f"[INFO] 无需调用 rule/confirm: need_rule_confirm={need_rule_confirm}, censored_rules_count={len(censored_rules)}")
+        # rule/confirm 调用逻辑已移至 chat_confirm 函数外层
+
+
 
         # 自动保存所有规则到 confirm_review_rule_result
         from ContractAudit.models import create_confirm_review_rule_result
@@ -1304,6 +1355,36 @@ async def chat_confirm(request: Request):
             if isinstance(val, str):
                 return [val] if val.strip() else []
             return [str(val)]
+        
+        def handle_rule_confirm_fallback(completed_rule, rule_id, error_info=None):
+            """处理 rule/confirm 兜底逻辑"""
+            print(f"[FALLBACK] 规则 {rule_id} 使用兜底处理")
+            if error_info:
+                print(f"[FALLBACK] 错误信息: {error_info}")
+            
+            # 兜底策略：根据匹配内容判断，而不是直接设置为失败
+            matched_content = completed_rule.get('matched_content', '')
+            if not matched_content or matched_content.strip() == "":
+                # 没有匹配内容，设置为通过
+                completed_rule['rule_confirm_result'] = True
+                completed_rule['review_result'] = "pass"
+                print(f"[FALLBACK] 规则 {rule_id} 没有匹配内容，设置为通过")
+            else:
+                # 有匹配内容，设置为不通过
+                completed_rule['rule_confirm_result'] = False
+                completed_rule['review_result'] = "done"
+                print(f"[FALLBACK] 规则 {rule_id} 有匹配内容，设置为不通过")
+            
+            if error_info:
+                completed_rule['rule_confirm_error'] = error_info
+            
+            # 记录兜底处理日志
+            try:
+                log_debug(f"[FALLBACK] 规则 {rule_id} 使用兜底处理，错误: {error_info}, 结果: {completed_rule['review_result']}")
+            except Exception as e:
+                print(f"[FALLBACK] 记录日志失败: {e}")
+            
+            return completed_rule
         def merge_rule_fields(rule, fields):
             """
             合并主规则和所有result_list子项中指定字段的内容为字符串数组
@@ -1364,18 +1445,26 @@ async def chat_confirm(request: Request):
             completed_rule = dict(matched_rule)
             
             # 检查是否需要处理 rule/confirm 响应结果
-            # 获取 rule_id
-            rule_id = fr.get('ruleId') or fr.get('id') or idx + 1
+            # 获取 rule_id - 保持与之前获取的 rule_id 一致
+            # rule_id = fr.get('ruleId') or fr.get('id') or idx + 1  # 注释掉这行，避免重新赋值
             
             # 检查当前规则是否在 censored_rules 列表中（censoredSearchEngine=1）
             current_rule_censored = fr in censored_rules
             if current_rule_censored:
                 print(f"[DEBUG] 规则 {rule_id} 在 censored_rules 列表中，需要处理 rule/confirm")
+                print(f"[DEBUG] 开始处理 rule/confirm 响应，规则ID: {rule_id}")
+                log_debug(f"[DEBUG] 开始处理 rule/confirm 响应，规则ID: {rule_id}")
             
-            if current_rule_censored and rule_engine_result and isinstance(rule_engine_result, dict) and not rule_engine_result.get('error'):
-                # 从 rule/confirm 响应中获取布尔值结果
-                # 注意：rule/confirm 返回的是批量响应格式，需要根据当前规则ID查找对应结果
-                rule_confirm_success = None
+            if current_rule_censored and rule_engine_result and isinstance(rule_engine_result, dict):
+                # 检查是否有错误信息
+                has_error = rule_engine_result.get('error') or rule_engine_result.get('fallback')
+                if has_error:
+                    error_info = rule_engine_result.get('error', 'Unknown error')
+                    completed_rule = handle_rule_confirm_fallback(completed_rule, rule_id, error_info)
+                else:
+                    # 从 rule/confirm 响应中获取布尔值结果
+                    # 注意：rule/confirm 返回的是批量响应格式，需要根据当前规则ID查找对应结果
+                    rule_confirm_success = None
                 
                 # 适配 Java BaseResponse 格式的响应解析逻辑
                 rule_confirm_success = None
@@ -1386,9 +1475,9 @@ async def chat_confirm(request: Request):
                     error_code = rule_engine_result.get('code') or rule_engine_result.get('errorCode')
                     
                     if error_code == 14000000:
-                        # 失败情况
+                        # 失败情况 - 但这里不应该执行到，因为已经在流开始前检查过了
+                        print(f"[WARN] 规则 {rule_id} 遇到错误码 14000000，但应该在流开始前就被处理")
                         rule_confirm_success = False
-                        print(f"[DEBUG] rule/confirm 返回错误码: {error_code}, 表示失败")
                     elif error_code == 20000000 or error_code == 10000000:  # 添加对 10000000 的支持
                         # 成功情况，需要从 data 字段提取批量结果
                         data = rule_engine_result.get('data')
@@ -1412,12 +1501,73 @@ async def chat_confirm(request: Request):
                                     rule_confirm_success = judge_result
                                 else:
                                     # 如果不是布尔值，尝试转换
-                                    rule_confirm_success = bool(judge_result) if judge_result is not None else False
+                                    rule_confirm_success = bool(judge_result) if judge_result is not None else None
+                                
+                                # 提取 verbatimTextList 和 reviseOpinion 字段
+                                verbatim_text_list = current_rule_result.get('verbatimTextList', [])
+                                revise_opinion = current_rule_result.get('reviseOpinion')
+                                
+                                # 将提取的字段添加到 completed_rule 中，确保与contract/review格式一致
+                                if verbatim_text_list:
+                                    completed_rule['verbatimTextList'] = verbatim_text_list
+                                    # 存储到 matched_content 字段，与contract/review格式保持一致
+                                    if isinstance(verbatim_text_list, list):
+                                        completed_rule['matched_content'] = "；".join([str(item) for item in verbatim_text_list if item])
+                                    else:
+                                        completed_rule['matched_content'] = str(verbatim_text_list)
+                                else:
+                                    # 如果没有verbatimTextList，确保matched_content字段存在
+                                    completed_rule['matched_content'] = completed_rule.get('matched_content', "")
+                                
+                                # 存储 reviseOpinion 字段
+                                completed_rule['reviseOpinion'] = revise_opinion
+                                
+                                # 处理 suggestions 字段，与contract/review格式保持一致
+                                if revise_opinion is not None and str(revise_opinion).strip():
+                                    completed_rule['suggestions'] = str(revise_opinion)
+                                else:
+                                    # 如果没有reviseOpinion，使用默认值或保持原有值
+                                    completed_rule['suggestions'] = completed_rule.get('suggestions', "")
+                                
+                                # 确保 analysis 字段存在，与contract/review格式保持一致
+                                if 'analysis' not in completed_rule:
+                                    completed_rule['analysis'] = ""
+                                
+                                # 确保 issues 字段存在，与contract/review格式保持一致
+                                if 'issues' not in completed_rule:
+                                    completed_rule['issues'] = []
+                                
+                                # 确保 resultList 字段存在，与contract/review格式保持一致
+                                if 'resultList' not in completed_rule:
+                                    completed_rule['resultList'] = []
+                                
+                                # 构建 resultList，与contract/review格式保持一致
+                                result_list = []
+                                result_item = {}
+                                
+                                if completed_rule.get('suggestions'):
+                                    result_item["suggestions"] = str(completed_rule['suggestions'])
+                                
+                                if completed_rule.get('matched_content'):
+                                    result_item["matched_content"] = str(completed_rule['matched_content'])
+                                
+                                if result_item:
+                                    result_list.append(result_item)
+                                
+                                completed_rule['resultList'] = result_list
+                                
                                 print(f"[DEBUG] 找到规则 {rule_id} 的结果: {judge_result} -> {rule_confirm_success}")
+                                print(f"[DEBUG] 提取的 verbatimTextList: {verbatim_text_list}")
+                                print(f"[DEBUG] 提取的 reviseOpinion: {revise_opinion}")
+                                print(f"[DEBUG] 存储到 matched_content: {completed_rule.get('matched_content')}")
+                                print(f"[DEBUG] 存储到 suggestions: {completed_rule.get('suggestions')}")
+                                print(f"[DEBUG] 存储到 reviseOpinion: {completed_rule.get('reviseOpinion')}")
+                                print(f"[DEBUG] 存储前 reviseOpinion 类型: {type(revise_opinion)}")
+                                print(f"[DEBUG] 存储后 reviseOpinion 类型: {type(completed_rule.get('reviseOpinion'))}")
                             else:
-                                # 没有找到当前规则的结果，使用默认值
-                                rule_confirm_success = False
-                                print(f"[DEBUG] 未找到规则 {rule_id} 的结果，使用默认值 False")
+                                # 没有找到当前规则的结果，使用兜底处理而不是直接失败
+                                rule_confirm_success = None
+                                print(f"[DEBUG] 未找到规则 {rule_id} 的结果，使用兜底处理")
                         elif isinstance(data, dict):
                             # 单个结果格式：从 JudgeResultDto 中提取 result 字段
                             judge_result = data.get('result')
@@ -1425,75 +1575,54 @@ async def chat_confirm(request: Request):
                                 rule_confirm_success = judge_result
                             else:
                                 # 如果不是布尔值，尝试转换
-                                rule_confirm_success = bool(judge_result) if judge_result is not None else False
+                                rule_confirm_success = bool(judge_result) if judge_result is not None else None
                         else:
                             # data 不是列表或字典，尝试直接使用
-                            rule_confirm_success = bool(data) if data is not None else False
+                            rule_confirm_success = bool(data) if data is not None else None
                         print(f"[DEBUG] rule/confirm 返回成功码: {error_code}, data: {data}, result: {rule_confirm_success}")
                     else:
-                        # 其他错误码或未知格式，尝试兼容旧格式
-                        if 'data' in rule_engine_result:
-                            # 直接使用 data 字段的布尔值
-                            rule_confirm_success = bool(rule_engine_result['data'])
-                        elif isinstance(rule_engine_result.get('success'), bool):
-                            # 尝试使用 success 字段
-                            rule_confirm_success = rule_engine_result.get('success')
-                        elif isinstance(rule_engine_result.get('result'), bool):
-                            # 尝试使用 result 字段
-                            rule_confirm_success = rule_engine_result.get('result')
-                        else:
-                            # 默认处理：如果响应中没有明确的布尔值，根据响应内容判断
-                            response_text = str(rule_engine_result).lower()
-                            # 优先检查 false 相关词汇，避免误判
-                            if 'false' in response_text or 'fail' in response_text or 'error' in response_text or '失败' in response_text:
-                                rule_confirm_success = False
-                            elif 'true' in response_text or 'pass' in response_text or 'success' in response_text or '成功' in response_text:
-                                rule_confirm_success = True
-                            else:
-                                # 如果无法确定，默认设为 False（保守策略）
-                                rule_confirm_success = False
+                        # 其他错误码或未知格式 - 但这里不应该执行到，因为已经在流开始前检查过了
+                        print(f"[WARN] 规则 {rule_id} 遇到未知错误码 {error_code}，但应该在流开始前就被处理")
+                        rule_confirm_success = None
                 else:
-                    # 非字典格式，尝试直接转换
-                    rule_confirm_success = bool(rule_engine_result) if rule_engine_result is not None else False
+                    # 非字典格式 - 但这里不应该执行到，因为已经在流开始前检查过了
+                    print(f"[WARN] 规则 {rule_id} 遇到格式异常，但应该在流开始前就被处理")
+                    rule_confirm_success = None
                 
-                print(f"[DEBUG] rule/confirm 响应结果: rule_id={rule_id}, success={rule_confirm_success}")
+                # 如果代码执行到这里，说明 rule/confirm 调用成功且返回了有效结果
+                print(f"[DEBUG] rule/confirm 处理成功，规则 {rule_id} 结果: {rule_confirm_success}")
                 print(f"[DEBUG] rule/confirm 原始响应: {rule_engine_result}")
-                try:
-                    log_debug(f"[DEBUG] rule/confirm 响应结果: rule_id={rule_id}, success={rule_confirm_success}")
-                    log_debug(f"[DEBUG] rule/confirm 原始响应: {rule_engine_result}")
-                except Exception as e:
-                    print(f"[LOG_DEBUG] rule/confirm 响应结果: rule_id={rule_id}, success={rule_confirm_success}")
-                    print(f"[LOG_DEBUG] rule/confirm 原始响应: {rule_engine_result}")
-                    print(f"[LOG_DEBUG] 写入日志失败: {e}")
+                print(f"[DEBUG] 规则 {rule_id} rule/confirm 处理完成")
+                log_debug(f"[DEBUG] 规则 {rule_id} rule/confirm 处理完成，结果: {rule_confirm_success}")
                 
                 # 根据布尔值设置 review_result：true -> "pass", false -> "done"
-                if rule_confirm_success:
+                if rule_confirm_success is True:
                     completed_rule['review_result'] = "pass"
-                    completed_rule['rule_confirm_result'] = True  # 新增：标记有 rule/confirm 结果
+                    completed_rule['rule_confirm_result'] = True
                     print(f"[DEBUG] 规则 {rule_id} 通过 rule/confirm 验证，设置 review_result=pass")
-                    print(f"[DEBUG] 规则 {rule_id} 设置完成: review_result={completed_rule['review_result']}, rule_confirm_result={completed_rule['rule_confirm_result']}")
-                    try:
-                        log_debug(f"[DEBUG] 规则 {rule_id} 通过 rule/confirm 验证，设置 review_result=pass")
-                    except Exception as e:
-                        print(f"[LOG_DEBUG] 规则 {rule_id} 通过 rule/confirm 验证，设置 review_result=pass")
-                        print(f"[LOG_DEBUG] 写入日志失败: {e}")
-                else:
+                elif rule_confirm_success is False:
                     completed_rule['review_result'] = "done"
-                    completed_rule['rule_confirm_result'] = False  # 新增：标记有 rule/confirm 结果
+                    completed_rule['rule_confirm_result'] = False
                     print(f"[DEBUG] 规则 {rule_id} 未通过 rule/confirm 验证，设置 review_result=done")
-                    print(f"[DEBUG] 规则 {rule_id} 设置完成: review_result={completed_rule['review_result']}, rule_confirm_result={completed_rule['rule_confirm_result']}")
-                    try:
-                        log_debug(f"[DEBUG] 规则 {rule_id} 未通过 rule/confirm 验证，设置 review_result=done")
-                    except Exception as e:
-                        print(f"[LOG_DEBUG] 规则 {rule_id} 未通过 rule/confirm 验证，设置 review_result=done")
-                        print(f"[LOG_DEBUG] 写入日志失败: {e}")
+                else:
+                    # 如果结果不是明确的布尔值，使用兜底处理
+                    print(f"[WARN] 规则 {rule_id} rule/confirm 结果不明确: {rule_confirm_success}")
+                    error_info = "规则引擎结果不明确或调用失败"
+                    completed_rule = handle_rule_confirm_fallback(completed_rule, rule_id, error_info)
             else:
-                print(f"[DEBUG] 无需处理 rule/confirm 响应: current_rule_censored={current_rule_censored}, rule_engine_result={rule_engine_result}")
-                try:
-                    log_debug(f"[DEBUG] 无需处理 rule/confirm 响应: current_rule_censored={current_rule_censored}, rule_engine_result={rule_engine_result}")
-                except Exception as e:
-                    print(f"[LOG_DEBUG] 无需处理 rule/confirm 响应: current_rule_censored={current_rule_censored}, rule_engine_result={rule_engine_result}")
-                    print(f"[LOG_DEBUG] 写入日志失败: {e}")
+                # 如果当前规则需要 rule/confirm 处理但没有结果，使用兜底处理
+                if current_rule_censored:
+                    if not rule_engine_result or not isinstance(rule_engine_result, dict):
+                        print(f"[WARN] 规则 {rule_id} 需要 rule/confirm 处理但结果异常，使用兜底处理")
+                        error_info = f"rule/confirm 结果异常: {type(rule_engine_result).__name__}"
+                        completed_rule = handle_rule_confirm_fallback(completed_rule, rule_id, error_info)
+                else:
+                    print(f"[DEBUG] 无需处理 rule/confirm 响应: current_rule_censored={current_rule_censored}, rule_engine_result={rule_engine_result}")
+                    try:
+                        log_debug(f"[DEBUG] 无需处理 rule/confirm 响应: current_rule_censored={current_rule_censored}, rule_engine_result={rule_engine_result}")
+                    except Exception as e:
+                        print(f"[LOG_DEBUG] 无需处理 rule/confirm 响应: current_rule_censored={current_rule_censored}, rule_engine_result={rule_engine_result}")
+                        print(f"[LOG_DEBUG] 写入日志失败: {e}")
             # 字段提取辅助函数
             def get_first(*args, default=None):
                 for arg in args:
@@ -1511,27 +1640,55 @@ async def chat_confirm(request: Request):
                 matched_rule.get('contractId') or matched_rule.get('contract_id'),
                 "1234"  # 默认值，避免从 contract_view_result 获取失败
             )
-            completed_rule['matched_content'] = get_first(
-                matched_rule.get('matched_content'), matched_rule.get('matchedContent'),
-                join_result_list_field(matched_rule, 'matched_content'),
-                fr.get('matchedContent'), fr.get('matched_content'),
-                join_result_list_field(fr, 'matched_content'),
-                ""
-            )
-            completed_rule['issues'] = get_first(
-                matched_rule.get('issues'),
-                join_result_list_field(matched_rule, 'issues'),
-                fr.get('issues'),
-                join_result_list_field(fr, 'issues'),
-                []
-            )
-            completed_rule['suggestions'] = get_first(
-                matched_rule.get('suggestions'),
-                join_result_list_field(matched_rule, 'suggestions'),
-                fr.get('suggestions'),
-                join_result_list_field(fr, 'suggestions'),
-                []
-            )
+            # 只有在没有 rule/confirm 结果时才设置这些字段，避免覆盖 rule/confirm 的结果
+            if 'rule_confirm_result' not in completed_rule:
+                completed_rule['matched_content'] = get_first(
+                    matched_rule.get('matched_content'), matched_rule.get('matchedContent'),
+                    join_result_list_field(matched_rule, 'matched_content'),
+                    fr.get('matchedContent'), fr.get('matched_content'),
+                    join_result_list_field(fr, 'matched_content'),
+                    ""
+                )
+                completed_rule['issues'] = get_first(
+                    matched_rule.get('issues'),
+                    join_result_list_field(matched_rule, 'issues'),
+                    fr.get('issues'),
+                    join_result_list_field(fr, 'issues'),
+                    []
+                )
+                completed_rule['suggestions'] = get_first(
+                    matched_rule.get('suggestions'),
+                    join_result_list_field(matched_rule, 'suggestions'),
+                    fr.get('suggestions'),
+                    join_result_list_field(fr, 'suggestions'),
+                    []
+                )
+            else:
+                # 已经有 rule/confirm 结果，保持现有值，只设置缺失的字段
+                if 'matched_content' not in completed_rule:
+                    completed_rule['matched_content'] = get_first(
+                        matched_rule.get('matched_content'), matched_rule.get('matchedContent'),
+                        join_result_list_field(matched_rule, 'matched_content'),
+                        fr.get('matchedContent'), fr.get('matched_content'),
+                        join_result_list_field(fr, 'matched_content'),
+                        ""
+                    )
+                if 'issues' not in completed_rule:
+                    completed_rule['issues'] = get_first(
+                        matched_rule.get('issues'),
+                        join_result_list_field(matched_rule, 'issues'),
+                        fr.get('issues'),
+                        join_result_list_field(fr, 'issues'),
+                        []
+                    )
+                if 'suggestions' not in completed_rule:
+                    completed_rule['suggestions'] = get_first(
+                        matched_rule.get('suggestions'),
+                        join_result_list_field(matched_rule, 'suggestions'),
+                        fr.get('suggestions'),
+                        join_result_list_field(fr, 'suggestions'),
+                        []
+                    )
             # 其它字段也加 fr 兜底
             risk_level_value = get_first(
                 matched_rule.get('risk_level'), matched_rule.get('riskLevel'),
@@ -1638,7 +1795,7 @@ async def chat_confirm(request: Request):
                     return []
             # 兼容所有应为 list 的字段，并保证存入数据库前为可解析的JSON字符串
             import json
-            for key in ["issues", "suggestions", "analysis", "matched_content"]:
+            for key in ["issues", "suggestions", "analysis", "matched_content", "reviseOpinion", "verbatimTextList"]:
                 val = completed_rule.get(key)
                 if val is None:
                     completed_rule[key] = json.dumps([], ensure_ascii=False)
@@ -1664,6 +1821,9 @@ async def chat_confirm(request: Request):
             print(f"  - rule_confirm_result: {completed_rule.get('rule_confirm_result', 'N/A')}")
             print(f"  - session_id: {completed_rule.get('session_id')}")
             print(f"  - contract_id: {completed_rule.get('contract_id')}")
+            print(f"  - reviseOpinion: {completed_rule.get('reviseOpinion')}")
+            print(f"  - suggestions: {completed_rule.get('suggestions')}")
+            print(f"  - matched_content: {completed_rule.get('matched_content')}")
             try:
                 log_debug(f"[DEBUG] 准备存储规则到数据库: rule_id={completed_rule.get('rule_id')}, review_result={completed_rule.get('review_result')}, rule_confirm_result={completed_rule.get('rule_confirm_result', 'N/A')}")
             except Exception as e:
@@ -1713,7 +1873,8 @@ async def chat_confirm(request: Request):
             # 保持原有字段
             rule = dict_keys_to_camel(convert_risk_level(rule))
             merge_fields_in_rule(rule, ["issues", "analysis"])
-            # 字段补全/重命名/增加
+            
+            # 字段补全/重命名/增加，确保与contract/review格式一致
             rule['ruleGroupId'] = fr.get('ruleGroupId') or fr.get('rule_group_id')
             rule['ruleGroupName'] = fr.get('ruleGroupName') or fr.get('rule_group_name')
             rule['riskAttributionId'] = (
@@ -1724,12 +1885,14 @@ async def chat_confirm(request: Request):
                 fr.get('riskAttributionName') or fr.get('risk_attribution_name') or
                 fr.get('riskName') or fr.get('risk_name')
             )
+            
             # 确保 riskLevel 是数字类型
             risk_level_value = fr.get('riskLevel') or fr.get('risk_level')
             if isinstance(risk_level_value, str):
                 rule['riskLevel'] = risk_level_to_number(risk_level_value)
             else:
                 rule['riskLevel'] = risk_level_value if risk_level_value is not None else -1
+            
             rule['ruleName'] = fr.get('ruleName') or fr.get('rule_name')
             
             # 设置 reviewResult 字段：优先使用 rule/confirm 的结果，否则根据匹配内容判断
@@ -1765,14 +1928,63 @@ async def chat_confirm(request: Request):
             # 前端可以通过 reviewResult 字段判断 rule/confirm 的结果
             # reviewResult: "pass" 表示通过, "done" 表示不通过
             
-            # 删除 suggestions、matchedContent、matched_content
-            for del_key in ['suggestions', 'matchedContent', 'matched_content']:
-                if del_key in rule:
-                    del rule[del_key]
+            # 确保所有contract/review格式的字段都存在
+            if 'matchedContent' not in rule:
+                rule['matchedContent'] = rule.get('matched_content', "")
+            
+            if 'suggestions' not in rule:
+                rule['suggestions'] = ""
+            
+            if 'analysis' not in rule:
+                rule['analysis'] = ""
+            
+            if 'issues' not in rule:
+                rule['issues'] = []
+            
+            # 构建 resultList 字段，与contract/review格式保持一致
+            result_list = []
+            result_item = {}
+            
+            if rule.get('suggestions'):
+                result_item["suggestions"] = str(rule['suggestions'])
+            
+            if rule.get('matchedContent'):
+                result_item["matched_content"] = str(rule['matchedContent'])
+            
+            # 如果有数据，添加到 resultList
+            if result_item:
+                result_list.append(result_item)
+            
+            rule['resultList'] = result_list
+            
             # 兼容 overallExplanation/overallResult
             rule['overallExplanation'] = rule.get('overallExplanation') or rule.get('overall_explanation', "")
             rule['overallResult'] = rule.get('overallResult') or rule.get('overall_result', "")
-            # 保留 resultList/result_list/ruleId/rule_id 等原始字段（不做删除）
+            
+            # 确保所有contract/review格式的字段都存在，与contract/review格式完全一致
+            required_fields = {
+                'ruleId': rule.get('ruleId') or rule.get('id'),
+                'ruleName': rule.get('ruleName'),
+                'reviewResult': rule.get('reviewResult'),
+                'riskLevel': rule.get('riskLevel'),
+                'matchedContent': rule.get('matchedContent'),
+                'suggestions': rule.get('suggestions'),
+                'analysis': rule.get('analysis'),
+                'issues': rule.get('issues'),
+                'resultList': rule.get('resultList'),
+                'ruleGroupId': rule.get('ruleGroupId'),
+                'ruleGroupName': rule.get('ruleGroupName'),
+                'riskAttributionId': rule.get('riskAttributionId'),
+                'riskAttributionName': rule.get('riskAttributionName'),
+                'overallExplanation': rule.get('overallExplanation'),
+                'overallResult': rule.get('overallResult')
+            }
+            
+            # 更新rule，确保所有字段都存在
+            for field, value in required_fields.items():
+                if value is not None:
+                    rule[field] = value
+            
             return rule
         final_data = {
             "code": 0,
@@ -1795,9 +2007,284 @@ async def chat_confirm(request: Request):
         # 清理数据，确保可以JSON序列化
         event_data = clean_data_for_json(event_data)
         
+        # 🔥🔥🔥 DEBUG: event_stream 函数结束前检查 rule_engine_result
+        print(f"🔥🔥🔥 DEBUG: event_stream 结束，rule_engine_result = {rule_engine_result} 🔥🔥🔥")
+        
         # 最终事件发送前也sleep 1秒
         await asyncio.sleep(1)
         yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+
+    # ===============================================================================
+    # 🚨 关键修复：在流式响应开始前调用 rule/confirm 并检查结果
+    # ===============================================================================
+    
+    # 执行 rule/confirm 调用（从 event_stream 移出）
+    if contract_id and need_rule_confirm:
+        # 构建标准格式的 rule/confirm 请求体
+        review_rule_dto_list = []
+        # 使用前端传入的规则，而不是 contract_view 返回的规则
+        for rule in censored_rules:
+            rule_id = rule.get('ruleId') or rule.get('id') or rule.get('rule_id')
+            if rule_id:
+                # 先处理 conditionInfo 字段，确保它是字符串格式
+                if 'conditionList' in rule:
+                    rule['conditionList'] = validate_and_convert_condition_info(rule['conditionList'])
+                elif 'condition_list' in rule:
+                    rule['condition_list'] = validate_and_convert_condition_info(rule['condition_list'])
+                
+                # 再对整个 rule 对象进行驼峰转换
+                rule_camel = dict_keys_to_camel(rule)
+                
+                # 构建标准格式的规则DTO，使用转换后的规则数据
+                rule_dto = {
+                    "id": int(rule_id) if isinstance(rule_id, (int, str)) else rule_id,
+                    "ruleName": rule_camel.get('ruleName') or f"规则{rule_id}",
+                    "type": rule_camel.get('type', 0),
+                    "riskLevel": rule_camel.get('riskLevel', 1),
+                    "riskAttributionId": rule_camel.get('riskAttributionId', 1),
+                    "riskAttributionName": rule_camel.get('riskAttributionName', "默认风险归属"),
+                    "censoredSearchEngine": rule_camel.get('censoredSearchEngine', 0),
+                    "ruleGroupId": rule_camel.get('ruleGroupId', 1),
+                    "ruleGroupName": rule_camel.get('ruleGroupName', "默认分组"),
+                    "includeRule": rule_camel.get('includeRule'),
+                    "logicRuleList": rule_camel.get('logicRuleList'),
+                    "exampleList": rule_camel.get('exampleList'),
+                    "conditionalIdentifier": rule_camel.get('conditionalIdentifier', "anyone"),
+                    "conditionList": rule_camel.get('conditionList', []),
+                    "reviseOpinion": rule_camel.get('reviseOpinion', ""),
+                    "creatorId": rule_camel.get('creatorId', 0),
+                    "creatorName": rule_camel.get('creatorName', "admin"),
+                    "version": rule_camel.get('version', 0),
+                    "updateTime": rule_camel.get('updateTime', "2025-01-01T00:00:00"),
+                    "result": True  # 默认通过，因为这是前端传入的原始规则
+                }
+                review_rule_dto_list.append(rule_dto)
+                # 调试日志
+                print(f"[DEBUG] 添加规则到 rule/confirm 请求: {rule_id}")
+                log_debug(f"[DEBUG] 添加规则到 rule/confirm 请求: {rule_id}")
+        
+        # 构建标准格式的请求体
+        rule_engine_payload = {
+            "contractId": contract_id,
+            "reviewRuleDtoList": review_rule_dto_list
+        }
+        
+        # 详细打印标准格式请求
+        print("=" * 80)
+        print("🚀 RULE/CONFIRM API 标准格式请求详情")
+        print("=" * 80)
+        print(f"📡 URL: {rule_engine_url}")
+        print(f"📋 请求方法: POST")
+        print(f"⏱️  超时时间: 30秒")
+        print("-" * 80)
+        print("📦 标准格式请求体 (JSON):")
+        print(json.dumps(rule_engine_payload, indent=2, ensure_ascii=False))
+        print("-" * 80)
+        print(f"📊 请求体大小: {len(json.dumps(rule_engine_payload, ensure_ascii=False))} 字符")
+        print(f"🔢 reviewRuleDtoList 数量: {len(review_rule_dto_list)}")
+        print(f"🆔 contractId: {contract_id}")
+        print("=" * 80)
+        
+        print(f"[LOG] rule/confirm 请求: url={rule_engine_url}, payload={rule_engine_payload}")
+        log_debug(f"[LOG] rule/confirm 请求: url={rule_engine_url}, payload={rule_engine_payload}")
+        try:
+            async with httpx.AsyncClient() as client:
+                rule_engine_resp = await asyncio.wait_for(client.post(rule_engine_url, json=rule_engine_payload, timeout=30), timeout=60)
+                rule_engine_resp_text = await rule_engine_resp.aread()
+                print(f"[LOG] rule/confirm 响应: status={rule_engine_resp.status_code}, text={rule_engine_resp_text}")
+                log_debug(f"[LOG] rule/confirm 响应: status={rule_engine_resp.status_code}, text={rule_engine_resp_text}")
+                
+                # 检查HTTP状态码
+                if rule_engine_resp.status_code != 200:
+                    # 记录错误日志
+                    error_msg = f"rule/confirm 接口返回错误状态码: {rule_engine_resp.status_code}"
+                    print(f"[ERROR] {error_msg}")
+                    print(f"[ERROR] 响应内容: {rule_engine_resp_text[:500] if rule_engine_resp_text else None}")
+                    log_debug(f"[ERROR] {error_msg}")
+                    log_debug(f"[ERROR] 响应内容: {rule_engine_resp_text}")
+                    
+                    # 设置错误结果，让后续处理能够继续
+                    rule_engine_result = {
+                        "error": error_msg,
+                        "error_type": "HTTP状态码错误",
+                        "error_code": "HTTP_STATUS_ERROR",
+                        "response_status": rule_engine_resp.status_code,
+                        "response_text": rule_engine_resp_text[:500] if rule_engine_resp_text else None,
+                        "fallback": True
+                    }
+                
+                # 安全解析 JSON 响应
+                try:
+                    rule_engine_result = rule_engine_resp.json()
+                    print(f"🔥🔥🔥 DEBUG: rule_engine_result 被赋值: {rule_engine_result} 🔥🔥🔥")
+                    # 检查返回类型，如果不是字典则转换为字典
+                    if not isinstance(rule_engine_result, dict):
+                        print(f"[WARN] rule/confirm 响应不是字典类型: {type(rule_engine_result)}, 值: {rule_engine_result}")
+                        log_debug(f"[WARN] rule/confirm 响应不是字典类型: {type(rule_engine_result)}, 值: {rule_engine_result}")
+                        # 如果是布尔值，转换为字典格式
+                        if isinstance(rule_engine_result, bool):
+                            rule_engine_result = {"success": rule_engine_result, "message": "Boolean response converted to dict"}
+                        else:
+                            rule_engine_result = {"data": rule_engine_result, "message": "Non-dict response converted to dict"}
+                except Exception as json_error:
+                    # 记录错误日志
+                    json_error_msg = f"解析 rule/confirm JSON 响应失败: {str(json_error)}"
+                    print(f"[ERROR] {json_error_msg}")
+                    print(f"[ERROR] 响应状态码: {rule_engine_resp.status_code}")
+                    print(f"[ERROR] 响应内容: {rule_engine_resp_text[:500]}...")  # 只显示前500字符
+                    log_debug(f"[ERROR] {json_error_msg}")
+                    log_debug(f"[ERROR] 响应状态码: {rule_engine_resp.status_code}")
+                    log_debug(f"[ERROR] 响应内容: {rule_engine_resp_text}")
+                    
+                    # 设置错误结果，让后续处理能够继续
+                    rule_engine_result = {
+                        "error": json_error_msg,
+                        "error_type": "JSON解析失败",
+                        "error_code": "JSON_PARSE_FAILED",
+                        "response_status": rule_engine_resp.status_code,
+                        "response_length": len(rule_engine_resp_text) if rule_engine_resp_text else 0,
+                        "fallback": True  # 标记为兜底处理
+                    }
+                
+                # 详细打印标准格式响应
+                print("=" * 80)
+                print("📥 RULE/CONFIRM API 标准格式响应详情")
+                print("=" * 80)
+                if rule_engine_result:
+                    if "error" in rule_engine_result:
+                        print(f"❌ 响应状态: 错误")
+                        print(f"🚨 错误信息: {rule_engine_result['error']}")
+                    else:
+                        print(f"✅ 响应状态: 成功")
+                        print(f"📊 响应体大小: {len(json.dumps(rule_engine_result, ensure_ascii=False))} 字符")
+                        print(f"🔢 响应体键数量: {len(rule_engine_result.keys())}")
+                        print(f"📋 响应体键列表: {list(rule_engine_result.keys())}")
+                        
+                        # 新增：详细分析 Java BaseResponse 格式
+                        error_code = rule_engine_result.get('code') or rule_engine_result.get('errorCode')
+                        if error_code is not None:
+                            print(f"🔍 Java BaseResponse 格式分析:")
+                            print(f"  - 错误码 (code): {error_code}")
+                            print(f"  - 消息 (message): {rule_engine_result.get('message', 'N/A')}")
+                            print(f"  - 数据 (data): {rule_engine_result.get('data', 'N/A')}")
+                            
+                            if error_code == 14000000:
+                                print(f"  - 状态: 失败 (规则引擎执行失败)")
+                            elif error_code == 20000000:
+                                print(f"  - 状态: 成功")
+                                data = rule_engine_result.get('data')
+                                if isinstance(data, dict):
+                                    print(f"  - JudgeResultDto 分析:")
+                                    print(f"    * contractId: {data.get('contractId', 'N/A')}")
+                                    print(f"    * ruleId: {data.get('ruleId', 'N/A')}")
+                                    print(f"    * result: {data.get('result', 'N/A')}")
+                            else:
+                                print(f"  - 状态: 未知错误码")
+                        
+                        print("-" * 80)
+                        print("📦 响应体 (JSON):")
+                        print(json.dumps(rule_engine_result, indent=2, ensure_ascii=False))
+                else:
+                    print("❌ 响应状态: 无响应")
+                print("=" * 80)
+        except Exception as e:
+            # 记录错误日志
+            error_msg = f"rule/confirm调用失败: {str(e)}"
+            print(f"[ERROR] {error_msg}")
+            print(f"[ERROR] URL: {rule_engine_url}")
+            print(f"[ERROR] Payload: {rule_engine_payload}")
+            print(f"[ERROR] Exception type: {type(e).__name__}")
+            log_debug(f"[ERROR] {error_msg}")
+            log_debug(f"[ERROR] URL: {rule_engine_url}")
+            log_debug(f"[ERROR] Payload: {rule_engine_payload}")
+            log_debug(f"[ERROR] Exception type: {type(e).__name__}")
+            
+            # 设置错误结果，让后续处理能够继续
+            rule_engine_result = {
+                "error": f"rule/confirm 接口调用失败: {str(e)}",
+                "error_type": "RULE_CONFIRM_CALL_FAILED",
+                "error_code": "RULE_CONFIRM_FAILED",
+                "fallback": True
+            }
+    elif need_rule_confirm:
+        print(f"[WARN] 需要调用 rule/confirm 但缺少必要参数: contract_id={contract_id}, rules_count={len(censored_rules)}")
+        log_debug(f"[WARN] 需要调用 rule/confirm 但缺少必要参数: contract_id={contract_id}, rules_count={len(censored_rules)}")
+    else:
+        print(f"[INFO] 无需调用 rule/confirm: need_rule_confirm={need_rule_confirm}, censored_rules_count={len(censored_rules)}")
+        log_debug(f"[INFO] 无需调用 rule/confirm: need_rule_confirm={need_rule_confirm}, censored_rules_count={len(censored_rules)}")
+    
+    # 检查 rule/confirm 结果
+    print(f"===============================================================================")
+    print(f"[STREAM_PRE_CHECK] 🔍 在流式响应开始前检查 rule/confirm 结果...")
+    print(f"[STREAM_PRE_CHECK] ⏰ 时间戳: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[STREAM_PRE_CHECK] 🔍 强制检查 rule_engine_result:")
+    print(f"[STREAM_PRE_CHECK]   - 类型: {type(rule_engine_result)}")
+    print(f"[STREAM_PRE_CHECK]   - 值: {rule_engine_result}")
+    print(f"[STREAM_PRE_CHECK]   - 是否为字典: {isinstance(rule_engine_result, dict)}")
+    if isinstance(rule_engine_result, dict):
+        print(f"[STREAM_PRE_CHECK]   - 错误码: {rule_engine_result.get('code') or rule_engine_result.get('errorCode')}")
+        print(f"[STREAM_PRE_CHECK]   - 错误信息: {rule_engine_result.get('error')}")
+        print(f"[STREAM_PRE_CHECK]   - 兜底标记: {rule_engine_result.get('fallback')}")
+    log_debug(f"[STREAM_PRE_CHECK] 检查 rule/confirm 结果，rule_engine_result: {rule_engine_result}")
+    
+    if rule_engine_result and isinstance(rule_engine_result, dict):
+        # 检查是否有错误信息
+        if rule_engine_result.get('error') or rule_engine_result.get('fallback'):
+            error_info = rule_engine_result.get('error', 'Unknown error')
+            print(f"[STREAM_PRE_CHECK] ❌ 发现错误信息: {error_info}")
+            print(f"[STREAM_PRE_CHECK] 🚨 准备抛出 RuleConfirmException (error/fallback)")
+            
+            raise RuleConfirmException(
+                f"rule/confirm 接口调用失败: {error_info}",
+                details={
+                    "error_type": rule_engine_result.get('error_type', 'UNKNOWN'),
+                    "error_code": rule_engine_result.get('error_code', 'UNKNOWN'),
+                    "response_data": rule_engine_result
+                }
+            )
+        
+        # 检查错误码
+        error_code = rule_engine_result.get('code') or rule_engine_result.get('errorCode')
+        print(f"[STREAM_PRE_CHECK] 🔢 检查错误码: {error_code}")
+        
+        if error_code == 14000000:
+            error_message = rule_engine_result.get('message', '规则引擎执行失败')
+            error_description = rule_engine_result.get('description', '')
+            print(f"[STREAM_PRE_CHECK] ❌ 发现错误码 14000000!")
+            print(f"[STREAM_PRE_CHECK] 📝 错误消息: {error_message}")
+            print(f"[STREAM_PRE_CHECK] 📄 错误描述: {error_description}")
+            print(f"[STREAM_PRE_CHECK] 🚨 准备抛出 RuleConfirmException (错误码 14000000)")
+            
+            raise RuleConfirmException(
+                f"rule/confirm 接口执行失败: {error_message}",
+                details={
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "error_description": error_description,
+                    "response_data": rule_engine_result
+                }
+            )
+        elif error_code and error_code not in [20000000, 10000000]:
+            error_message = rule_engine_result.get('message', '未知错误')
+            print(f"[STREAM_PRE_CHECK] ❌ 发现未知错误码: {error_code}")
+            print(f"[STREAM_PRE_CHECK] 📝 错误消息: {error_message}")
+            print(f"[STREAM_PRE_CHECK] 🚨 准备抛出 RuleConfirmException (未知错误码)")
+            
+            raise RuleConfirmException(
+                f"rule/confirm 接口返回未知错误码: {error_code}",
+                details={
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "response_data": rule_engine_result
+                }
+            )
+        else:
+            print(f"[STREAM_PRE_CHECK] ✅ rule/confirm 结果检查通过，错误码: {error_code}")
+    else:
+        print(f"[STREAM_PRE_CHECK] ⚠️  rule_engine_result 为空或非字典类型: {type(rule_engine_result)}")
+    
+    print(f"[STREAM_PRE_CHECK] ✅ 检查完成，开始流式响应...")
+    print(f"===============================================================================")
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -2118,6 +2605,29 @@ async def debug_rule_confirm_results(session_id: str, db: Session = Depends(get_
             "error": str(e),
             "session_id": session_id
         }
+
+def validate_and_convert_condition_info(condition_list):
+    """递归处理 conditionList，确保 conditionInfo 字段格式正确"""
+    if not condition_list:
+        return condition_list
+    new_list = []
+    for cond in condition_list:
+        if isinstance(cond, dict) and 'conditionInfo' in cond:
+            val = cond['conditionInfo']
+            # 确保 conditionInfo 是字符串格式，Java 后端期望字符串
+            if not isinstance(val, str):
+                # 如果不是字符串，转换为 JSON 字符串
+                cond['conditionInfo'] = json.dumps(val, ensure_ascii=False)
+            else:
+                # 如果是字符串，验证是否为有效的 JSON 格式
+                try:
+                    # 验证 JSON 格式是否正确，但不改变类型
+                    json.loads(val)
+                except Exception:
+                    # 如果不是有效的 JSON，保持原样
+                    pass
+        new_list.append(cond)
+    return new_list
 
 if __name__ == "__main__":
     import uvicorn

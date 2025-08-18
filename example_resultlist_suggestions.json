@@ -1,0 +1,37 @@
+{
+  "event": "rule_completed",
+  "timestamp": 1754564398.2256124,
+  "data": {
+    "session_id": "test_session_001",
+    "status": "rule_completed",
+    "completed_rule": {
+      "ruleId": 1,
+      "ruleName": "不得空白签字",
+      "type": 0,
+      "riskLevel": 2,
+      "riskAttributionId": 101,
+      "riskAttributionName": "法律部",
+      "censoredSearchEngine": 1,
+      "ruleGroupId": 10,
+      "ruleGroupName": "签署规范",
+      "includeRule": "签字页必须填写",
+      "reviewResult": "done",
+      "resultList": [
+        {
+          "suggestions": "建议在签字处填写具体日期和签字人姓名",
+          "matched_content": "甲方（盖章）：；乙方（盖章）："
+        }
+      ],
+      "verbatimTextList": [
+        "甲方（盖章）：",
+        "乙方（盖章）："
+      ],
+      "reviseOpinion": "建议在签字处填写具体日期和签字人姓名",
+      "rule_confirm_result": false,
+      "matchedContent": "甲方（盖章）：；乙方（盖章）：",
+      "suggestions": "建议在签字处填写具体日期和签字人姓名",
+      "overallExplanation": "",
+      "overallResult": ""
+    }
+  }
+} 

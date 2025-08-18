@@ -204,7 +204,7 @@ class ConfirmReviewSession(Base):
 
 class ConfirmReviewRuleResult(Base):
     """Confirm接口单个规则审查结果表"""
-    __tablename__ = 'confirm_review_rule_result'
+    __tablename__ = 't_confirm_review_rule_result'
     __table_args__ = (
         Index('idx_session_id', 'session_id'),
         Index('idx_rule_id', 'rule_id'),
@@ -302,8 +302,8 @@ def update_confirm_review_session(db: Session, session_id: str, update_data: dic
     return session
 
 def create_confirm_review_rule_result(db: Session, result_data: dict) -> ConfirmReviewRuleResult:
-    # 保证四个字段为可解析的JSON字符串
-    for key in ["matched_content", "analysis", "issues", "suggestions"]:
+    # 保证字段为可解析的JSON字符串（包含所有需要处理的字段）
+    for key in ["matched_content", "analysis", "issues", "suggestions", "reviseOpinion", "verbatimTextList"]:
         result_data[key] = ensure_json_str(result_data.get(key))
     
     # 处理自定义的创建时间
